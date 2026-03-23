@@ -272,11 +272,23 @@ export default function App() {
     setEditingTitle(false);
   };
 
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen();
+  };
+
   const chapters = items.filter((i) => i.kind === "chapter");
   const sectionsList = items.filter((i) => i.kind === "section");
   const stats = chapters.reduce((a, c) => { a[c.type] = (a[c.type] || 0) + 1; return a; }, {});
   let chapterCount = 0;
   let sectionCount = 0;
+
+  // Compute drag group range for visual feedback
+  let dragGroupEnd = null;
+  if (dragIdx !== null && items[dragIdx]?.kind === "section") {
+    dragGroupEnd = dragIdx + 1;
+    while (dragGroupEnd < items.length && items[dragGroupEnd].kind !== "section") dragGroupEnd++;
+  }
 
   const backdrop = {
     position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)",
@@ -457,19 +469,27 @@ export default function App() {
 
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
             <button onClick={() => setCompact(!compact)}
-              title={compact ? "편집 모드" : "전체보기"}
               style={{
-                fontSize: compact ? 14 : 16, width: compact ? 28 : 32, height: compact ? 28 : 32,
+                fontSize: 13, padding: "6px 14px", height: 32,
+                background: "none", border: "1px solid #ddd", borderRadius: 6,
+                color: "#666", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+              }}>
+              {compact ? "편집" : "전체"}
+            </button>
+            <button onClick={toggleFullscreen}
+              title="풀스크린"
+              style={{
+                fontSize: 15, width: 32, height: 32,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 background: "none", border: "1px solid #ddd", borderRadius: 6,
                 color: "#888", cursor: "pointer",
               }}>
-              {compact ? "⤡" : "⤢"}
+              ⛶
             </button>
             <button onClick={() => setShowDrawer(true)}
               title="메뉴"
               style={{
-                fontSize: compact ? 16 : 20, width: compact ? 28 : 32, height: compact ? 28 : 32,
+                fontSize: 18, width: 32, height: 32,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 background: "none", border: "1px solid #ddd", borderRadius: 6,
                 color: "#888", cursor: "pointer",
@@ -495,6 +515,7 @@ export default function App() {
           const secNum = isSection ? sectionCount : null;
           const isDragging = dragIdx === idx;
           const isOver = overIdx === idx;
+          const isInDragGroup = dragGroupEnd !== null && idx > dragIdx && idx < dragGroupEnd;
 
           if (isSection) {
             return (
@@ -511,6 +532,7 @@ export default function App() {
                   cursor: "grab",
                   borderTop: idx === 0 ? "none" : "1px solid #ddd6ce",
                   background: isDragging ? "#e8e3dd" : isOver ? "#ede8e2" : "transparent",
+                  opacity: isDragging ? 0.5 : 1,
                   borderLeft: isOver ? "4px solid #1a1a1a" : "4px solid transparent",
                   borderRadius: 6, transition: "background 0.15s",
                   breakInside: "avoid",
@@ -556,8 +578,9 @@ export default function App() {
                 gap: compact ? 6 : 10,
                 padding: compact ? "3px 8px" : "8px 16px",
                 marginBottom: 0,
-                background: isDragging ? "#e8e3dd" : isOver ? "#ede8e2" : "transparent",
-                borderRadius: 6, cursor: "grab", transition: "background 0.15s",
+                background: isDragging ? "#e8e3dd" : isInDragGroup ? "#e8e3dd" : isOver ? "#ede8e2" : "transparent",
+                opacity: (isDragging || isInDragGroup) ? 0.5 : 1,
+                borderRadius: 6, cursor: "grab", transition: "background 0.15s, opacity 0.15s",
                 borderLeft: isOver ? "4px solid #1a1a1a" : "4px solid transparent",
                 breakInside: "avoid",
               }}>
