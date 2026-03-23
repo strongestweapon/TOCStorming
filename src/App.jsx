@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 
 const INITIAL_ITEMS = [
   { id: "s0", text: "프롤로그", kind: "section" },
-  { id: "1", text: "프롤로그 — 인공위성 송호준, 인공지능 송호준", type: "에세이", kind: "chapter" },
+  { id: "1", text: "인공위성 송호준, 인공지능 송호준", type: "에세이", kind: "chapter" },
   { id: "s1", text: "왜 지금, 왜 우리인가", kind: "section" },
   { id: "2", text: "인공지능이 머야?", type: "기술", kind: "chapter" },
   { id: "3", text: "왜 갑자기 AI가 터졌나 — GPU, 데이터, 그리고 돈 이야기", type: "기술", kind: "chapter" },
@@ -46,7 +46,7 @@ const INITIAL_ITEMS = [
   { id: "36", text: "인공지능 시대에 '나'는 누구인가", type: "에세이", kind: "chapter" },
   { id: "37", text: "AI로 내 인생 연표 만들기 — 자녀에게 물려줄 가족사", type: "사례", kind: "chapter" },
   { id: "s7", text: "에필로그", kind: "section" },
-  { id: "38", text: "에필로그 — 인공위성을 쏘던 그 마음으로", type: "에세이", kind: "chapter" },
+  { id: "38", text: "인공위성을 쏘던 그 마음으로", type: "에세이", kind: "chapter" },
 ];
 
 const DEFAULT_TYPES = ["에세이", "기술", "사례"];
@@ -235,7 +235,7 @@ export default function App() {
   const cancelEdit = () => { setEditingId(null); setEditText(""); setEditType(""); };
   const saveApiKey = () => { localStorage.setItem("book-toc-api-key", apiKeyInput); setApiKey(apiKeyInput); setShowSettings(false); };
   const resetAll = () => { if (confirm("목차를 초기 상태로 되돌릴까?")) { pushUndo(); setItems(INITIAL_ITEMS); setRemovedItems([]); setFeedback(""); setShowSettings(false); } };
-  const exportToc = () => { let n = 0; const text = items.map((i) => { if (i.kind === "section") return `\n━━ ${i.text} ━━`; n++; return `  ${n}. [${i.type}] ${i.text}`; }).join("\n"); const blob = new Blob([`${bookTitle}\n목차\n${"═".repeat(40)}\n${text}\n`], { type: "text/plain;charset=utf-8" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "목차.txt"; a.click(); URL.revokeObjectURL(url); };
+  const exportToc = () => { let secN = 0; const text = items.map((i) => { if (i.kind === "section") { secN++; return `\n## ${secN}. ${i.text}`; } return `- ${i.text}`; }).join("\n"); const blob = new Blob([`# ${bookTitle}\n${text}\n`], { type: "text/plain;charset=utf-8" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "목차.md"; a.click(); URL.revokeObjectURL(url); };
   const toggleFullscreen = () => { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); };
   const startTitleEdit = () => { setEditingTitle(true); setTitleInput(bookTitle); };
   const saveTitleEdit = () => { if (titleInput.trim()) setBookTitle(titleInput.trim()); setEditingTitle(false); };
@@ -378,8 +378,8 @@ export default function App() {
       )}
 
       {/* HEADER */}
-      <div style={{ position: "sticky", top: 0, background: "#F5F0EB", zIndex: 50, padding: compact ? "10px 32px" : "20px 32px", borderBottom: "1px solid #e8e3dd" }}>
-        <div style={{ maxWidth: compact ? 1200 : 860, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ position: "sticky", top: 0, background: "#F5F0EB", zIndex: 50, borderBottom: "1px solid #e8e3dd" }}>
+        <div style={{ maxWidth: compact ? 1200 : 860, margin: "0 auto", padding: compact ? "10px 32px" : "20px 32px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
             {editingTitle && !compact ? (
               <div style={{ display: "flex", gap: 10, alignItems: "center", flex: 1 }}>
@@ -388,7 +388,7 @@ export default function App() {
                 <button onClick={saveTitleEdit} style={{ fontSize: 16, padding: "8px 20px", border: "1px solid #1a1a1a", borderRadius: 8, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>저장</button>
               </div>
             ) : (
-              <h1 onClick={() => !compact && startTitleEdit()} style={{ fontSize: compact ? 16 : 28, fontWeight: 700, letterSpacing: "-0.02em", margin: 0, lineHeight: 1.3, cursor: compact ? "default" : "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bookTitle}</h1>
+              <h1 onClick={() => !compact && startTitleEdit()} style={{ fontSize: compact ? 16 : 28, fontWeight: 700, letterSpacing: "-0.02em", margin: 0, marginLeft: compact ? 24 : 32, lineHeight: 1.3, cursor: compact ? "default" : "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bookTitle}</h1>
             )}
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
@@ -469,14 +469,21 @@ export default function App() {
               <div style={{ padding: 24, background: "#fff", borderRadius: 10, marginTop: 20, marginBottom: 20 }}>
                 <input value={newText} onChange={(e) => setNewText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addItem(); if (e.key === "Escape") { setAddMode(null); setNewText(""); setNewTagInput(""); } }}
                   placeholder={addMode === "section" ? "파트 이름..." : "새 챕터 제목..."} autoFocus
-                  style={{ width: "100%", fontSize: 22, padding: "14px 18px", border: "1px solid #ddd", borderRadius: 8, outline: "none", fontFamily: "inherit", marginBottom: 16, boxSizing: "border-box", fontWeight: addMode === "section" ? 700 : 400 }} />
+                  style={{ width: "100%", fontSize: 22, padding: "14px 18px", border: "1px solid #ddd", borderRadius: 8, outline: "none", fontFamily: "inherit", marginBottom: 16, boxSizing: "border-box", fontWeight: 400 }} />
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   {addMode === "chapter" && (
                     <>
-                      {customTypes.map((t) => (
-                        <button key={t} onClick={() => { setNewType(t); setNewTagInput(""); }}
-                          style={{ fontSize: 18, padding: "8px 20px", border: (newType === t && !newTagInput) ? "1px solid #1a1a1a" : "1px solid #ddd", borderRadius: 6, background: (newType === t && !newTagInput) ? "#1a1a1a" : "transparent", color: (newType === t && !newTagInput) ? "#F5F0EB" : "#888", cursor: "pointer" }}>{t}</button>
-                      ))}
+                      {customTypes.map((t) => {
+                        const sel = newType === t && !newTagInput;
+                        return (
+                          <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 4, border: sel ? "1px solid #1a1a1a" : "1px solid #ddd", borderRadius: 6, background: sel ? "#1a1a1a" : "transparent", paddingRight: 4 }}>
+                            <button onClick={() => { setNewType(t); setNewTagInput(""); }}
+                              style={{ fontSize: 18, padding: "8px 12px 8px 20px", background: "none", border: "none", color: sel ? "#F5F0EB" : "#888", cursor: "pointer", fontFamily: "inherit" }}>{t}</button>
+                            <button onClick={(e) => { e.stopPropagation(); if (customTypes.length > 1) { setCustomTypes((p) => p.filter((x) => x !== t)); if (newType === t) setNewType(customTypes.find((x) => x !== t) || ""); } }}
+                              style={{ fontSize: 14, background: "none", border: "none", color: sel ? "#F5F0EB55" : "#ccc", cursor: "pointer", padding: "2px 4px", lineHeight: 1 }}>×</button>
+                          </span>
+                        );
+                      })}
                       <input value={newTagInput} onChange={(e) => setNewTagInput(e.target.value)} placeholder="+ 새 태그"
                         style={{ fontSize: 18, padding: "8px 16px", width: 140, border: newTagInput ? "1px solid #1a1a1a" : "1px solid #ddd", borderRadius: 6, outline: "none", fontFamily: "inherit", background: newTagInput ? "#1a1a1a" : "transparent", color: newTagInput ? "#F5F0EB" : "#888" }} />
                     </>
@@ -489,19 +496,7 @@ export default function App() {
             ) : (
               <div style={{ display: "flex", gap: 12, marginTop: 20, marginBottom: 20 }}>
                 <button onClick={() => setAddMode("chapter")} style={{ flex: 1, fontSize: 20, padding: "16px 24px", border: "1px dashed #ccc", borderRadius: 8, background: "transparent", color: "#999", cursor: "pointer" }}>+ 챕터</button>
-                <button onClick={() => setAddMode("section")} style={{ flex: 1, fontSize: 20, padding: "16px 24px", border: "1px dashed #ccc", borderRadius: 8, background: "transparent", color: "#999", cursor: "pointer", fontWeight: 600 }}>+ 파트</button>
-              </div>
-            )}
-            {removedItems.length > 0 && (
-              <div style={{ marginTop: 12, marginBottom: 20 }}>
-                <button onClick={() => setShowRemoved(!showRemoved)} style={{ fontSize: 18, background: "none", border: "none", color: "#aaa", cursor: "pointer", padding: 0, textDecoration: "underline" }}>빠진 항목 {removedItems.length}개 {showRemoved ? "숨기기" : "보기"}</button>
-                {showRemoved && <div style={{ marginTop: 12 }}>{removedItems.map((item, ri) => (
-                  <div key={item.id + "-rm"} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", fontSize: 20, color: "#aaa" }}>
-                    {item.kind === "section" && <span style={{ fontSize: 14, border: "1px solid #ddd", borderRadius: 5, padding: "2px 8px", color: "#bbb" }}>파트</span>}
-                    <span style={{ flex: 1, textDecoration: "line-through" }}>{item.text}</span>
-                    <button onClick={() => restoreItem(ri)} style={{ fontSize: 18, padding: "6px 18px", border: "1px solid #ddd", borderRadius: 6, background: "transparent", color: "#888", cursor: "pointer" }}>복원</button>
-                  </div>
-                ))}</div>}
+                <button onClick={() => setAddMode("section")} style={{ flex: 1, fontSize: 20, padding: "16px 24px", border: "1px dashed #ccc", borderRadius: 8, background: "transparent", color: "#999", cursor: "pointer" }}>+ 파트</button>
               </div>
             )}
           </>
