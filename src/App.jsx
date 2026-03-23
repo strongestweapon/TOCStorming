@@ -102,6 +102,26 @@ export default function App() {
   const [overGroupIdx, setOverGroupIdx] = useState(null);
   const [dropLinePos, setDropLinePos] = useState(null); // flat index where chapter will be inserted
   const idCounter = useRef(200);
+  const compactRef = useRef(null);
+  const [compactScale, setCompactScale] = useState(1);
+
+  // Auto-scale compact mode to fit viewport
+  useEffect(() => {
+    if (!compact) { setCompactScale(1); return; }
+    const measure = () => {
+      const el = compactRef.current;
+      if (!el) return;
+      el.style.transform = "none";
+      requestAnimationFrame(() => {
+        const h = el.offsetHeight;
+        const available = window.innerHeight * 0.9;
+        setCompactScale(h > 0 ? Math.min(available / h, 1.5) : 1);
+      });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [compact, items]);
 
   useEffect(() => { saveState(items, removedItems); }, [items, removedItems]);
   useEffect(() => { try { localStorage.setItem("book-toc-custom-prompt", customPrompt); } catch {} }, [customPrompt]);
@@ -290,9 +310,9 @@ export default function App() {
               <span onClick={() => startEdit(ch.id, ch.text, ch.type)} style={{ fontSize: fs, lineHeight: compact ? 1.35 : 1.4, cursor: "text", wordBreak: "keep-all" }}>{ch.text}</span>
             )}
           </div>
-          {editingId !== ch.id && (
+          {editingId !== ch.id && !compact && (
             <span onClick={() => startEdit(ch.id, ch.text, ch.type)}
-              style={{ fontSize: compact ? 11 : 14, padding: compact ? "1px 5px" : "3px 10px", border: "1px solid #ccc", borderRadius: compact ? 3 : 4, background: "transparent", color: "#888", cursor: "pointer", flexShrink: 0, marginTop: compact ? 1 : 2 }}>
+              style={{ fontSize: 14, padding: "3px 10px", border: "1px solid #ccc", borderRadius: 4, background: "transparent", color: "#888", cursor: "pointer", flexShrink: 0, marginTop: 2 }}>
               {ch.type}
             </span>
           )}
@@ -377,32 +397,47 @@ export default function App() {
         </>
       )}
 
-      {/* HEADER */}
-      <div style={{ position: "sticky", top: 0, background: "#F5F0EB", zIndex: 50, borderBottom: "1px solid #e8e3dd" }}>
-        <div style={{ maxWidth: compact ? 1200 : 860, margin: "0 auto", padding: compact ? "10px 32px" : "20px 32px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
-            {editingTitle && !compact ? (
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flex: 1 }}>
-                <input value={titleInput} onChange={(e) => setTitleInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveTitleEdit(); if (e.key === "Escape") setEditingTitle(false); }} autoFocus
-                  style={{ flex: 1, fontSize: 28, fontWeight: 700, padding: "6px 14px", border: "1px solid #ccc", borderRadius: 8, background: "#fff", outline: "none", fontFamily: "inherit" }} />
-                <button onClick={saveTitleEdit} style={{ fontSize: 16, padding: "8px 20px", border: "1px solid #1a1a1a", borderRadius: 8, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>저장</button>
-              </div>
-            ) : (
-              <h1 onClick={() => !compact && startTitleEdit()} style={{ fontSize: compact ? 16 : 28, fontWeight: 700, letterSpacing: "-0.02em", margin: 0, marginLeft: compact ? 24 : 32, lineHeight: 1.3, cursor: compact ? "default" : "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bookTitle}</h1>
-            )}
-          </div>
-          <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
-            <button onClick={undo} disabled={!undoStack.length} title="되돌리기" style={{ ...headerBtn, color: undoStack.length ? "#666" : "#ddd", borderColor: undoStack.length ? "#ccc" : "#eee" }}>↩</button>
-            <button onClick={redo} disabled={!redoStack.length} title="다시 실행" style={{ ...headerBtn, color: redoStack.length ? "#666" : "#ddd", borderColor: redoStack.length ? "#ccc" : "#eee" }}>↪</button>
-            <button onClick={() => setCompact(!compact)} style={{ fontSize: 13, padding: "6px 14px", height: 32, background: "none", border: "1px solid #ddd", borderRadius: 6, color: "#666", cursor: "pointer", fontFamily: "inherit" }}>{compact ? "편집" : "전체"}</button>
-            <button onClick={toggleFullscreen} title="풀스크린" style={headerBtn}>⛶</button>
-            <button onClick={() => setShowDrawer(true)} title="메뉴" style={{ ...headerBtn, fontSize: 18 }}>≡</button>
+      {/* HEADER — edit mode only */}
+      {!compact && (
+        <div style={{ position: "sticky", top: 0, background: "#F5F0EB", zIndex: 50, borderBottom: "1px solid #e8e3dd" }}>
+          <div style={{ maxWidth: 860, margin: "0 auto", padding: "20px 32px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
+              {editingTitle ? (
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flex: 1 }}>
+                  <input value={titleInput} onChange={(e) => setTitleInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveTitleEdit(); if (e.key === "Escape") setEditingTitle(false); }} autoFocus
+                    style={{ flex: 1, fontSize: 28, fontWeight: 700, padding: "6px 14px", border: "1px solid #ccc", borderRadius: 8, background: "#fff", outline: "none", fontFamily: "inherit" }} />
+                  <button onClick={saveTitleEdit} style={{ fontSize: 16, padding: "8px 20px", border: "1px solid #1a1a1a", borderRadius: 8, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>저장</button>
+                </div>
+              ) : (
+                <h1 onClick={startTitleEdit} style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em", margin: 0, marginLeft: 32, lineHeight: 1.3, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bookTitle}</h1>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+              <button onClick={undo} disabled={!undoStack.length} title="되돌리기" style={{ ...headerBtn, color: undoStack.length ? "#666" : "#ddd", borderColor: undoStack.length ? "#ccc" : "#eee" }}>↩</button>
+              <button onClick={redo} disabled={!redoStack.length} title="다시 실행" style={{ ...headerBtn, color: redoStack.length ? "#666" : "#ddd", borderColor: redoStack.length ? "#ccc" : "#eee" }}>↪</button>
+              <button onClick={() => setCompact(true)} style={{ fontSize: 13, padding: "6px 14px", height: 32, background: "none", border: "1px solid #ddd", borderRadius: 6, color: "#666", cursor: "pointer", fontFamily: "inherit" }}>프리뷰</button>
+              <button onClick={toggleFullscreen} title="풀스크린" style={headerBtn}>⛶</button>
+              <button onClick={() => setShowDrawer(true)} title="메뉴" style={{ ...headerBtn, fontSize: 18 }}>≡</button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* MAIN */}
-      <div style={{ maxWidth: compact ? 1200 : 860, margin: "0 auto", padding: compact ? "16px 40px 40px" : "24px 32px 80px", columnCount: compact ? 2 : 1, columnGap: compact ? 48 : 0 }}>
+      <div ref={compact ? compactRef : undefined} style={{ maxWidth: compact ? 1200 : 860, margin: compact ? "0 auto" : "0 auto", padding: compact ? "24px 80px" : "24px 32px 80px", columnCount: compact ? 2 : 1, columnGap: compact ? 48 : 0, ...(compact ? { transform: `scale(${compactScale})`, transformOrigin: "top center" } : {}) }}>
+        {/* Compact mode: title + buttons inside content */}
+        {compact && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, columnSpan: "all" }}>
+            <h1 style={{ fontSize: 16, fontWeight: 700, letterSpacing: "-0.02em", margin: 0 }}>{bookTitle}</h1>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <button onClick={undo} disabled={!undoStack.length} title="되돌리기" style={{ ...headerBtn, width: 28, height: 28, fontSize: 14, color: undoStack.length ? "#666" : "#ddd", borderColor: undoStack.length ? "#ccc" : "#eee" }}>↩</button>
+              <button onClick={redo} disabled={!redoStack.length} title="다시 실행" style={{ ...headerBtn, width: 28, height: 28, fontSize: 14, color: redoStack.length ? "#666" : "#ddd", borderColor: redoStack.length ? "#ccc" : "#eee" }}>↪</button>
+              <button onClick={() => setCompact(false)} style={{ fontSize: 12, padding: "5px 12px", height: 28, background: "none", border: "1px solid #ddd", borderRadius: 6, color: "#666", cursor: "pointer", fontFamily: "inherit" }}>편집</button>
+              <button onClick={toggleFullscreen} title="풀스크린" style={{ ...headerBtn, width: 28, height: 28, fontSize: 14 }}>⛶</button>
+              <button onClick={() => setShowDrawer(true)} title="메뉴" style={{ ...headerBtn, width: 28, height: 28, fontSize: 16 }}>≡</button>
+            </div>
+          </div>
+        )}
         {groups.map((group, gi) => {
           const isGroupDragging = dragType === "group" && dragGroupIdx === gi;
           const isGroupOver = dragType === "group" && overGroupIdx === gi && dragGroupIdx !== gi;
@@ -422,7 +457,7 @@ export default function App() {
               onDragEnd={resetDrag}
               style={{
                 opacity: isGroupDragging ? 0.35 : 1,
-                borderTop: gi > 0 ? "1px solid #ddd6ce" : "none",
+                borderTop: (!compact && gi > 0) ? "1px solid #ddd6ce" : "none",
                 marginTop: compact ? 6 : 12,
                 borderRadius: 8,
                 background: isGroupOver ? "#ede8e2" : "transparent",
