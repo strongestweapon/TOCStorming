@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 
 const INITIAL_ITEMS = [
   { id: "1", text: "프롤로그 — 인공위성 송호준, 인공지능 송호준", type: "에세이", kind: "chapter" },
@@ -65,32 +65,16 @@ const SYSTEM_PROMPT = `당신은 "노인을 위한 AI는 없다?"라는 책의 �
 - 캐주얼한 한국어 반말로 대답합니다`;
 
 function loadState() {
-  try {
-    const saved = localStorage.getItem("book-toc-state");
-    if (saved) return JSON.parse(saved);
-  } catch {}
-  return null;
+  try { const s = localStorage.getItem("book-toc-state"); if (s) return JSON.parse(s); } catch {} return null;
 }
-
 function saveState(items, removed) {
-  try {
-    localStorage.setItem("book-toc-state", JSON.stringify({ items, removed }));
-  } catch {}
-}
-
-// Helper: find end of a section's group
-function sectionGroupEnd(items, secIdx) {
-  let end = secIdx + 1;
-  while (end < items.length && items[end].kind !== "section") end++;
-  return end;
+  try { localStorage.setItem("book-toc-state", JSON.stringify({ items, removed })); } catch {}
 }
 
 export default function App() {
   const saved = useRef(loadState());
   const [items, setItems] = useState(saved.current?.items || INITIAL_ITEMS);
   const [removedItems, setRemovedItems] = useState(saved.current?.removed || []);
-  const [dragIdx, setDragIdx] = useState(null);
-  const [overIdx, setOverIdx] = useState(null);
   const [feedback, setFeedback] = useState("");
   const [loading, setLoading] = useState(false);
   const [addMode, setAddMode] = useState(null);
@@ -124,166 +108,148 @@ export default function App() {
   const [showDrawer, setShowDrawer] = useState(false);
   const [undoStack, setUndoStack] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
+  // Drag state
+  const [dragType, setDragType] = useState(null); // "group" | "chapter"
+  const [dragGroupIdx, setDragGroupIdx] = useState(null);
+  const [dragChapterId, setDragChapterId] = useState(null);
+  const [overGroupIdx, setOverGroupIdx] = useState(null);
+  const [overChapterId, setOverChapterId] = useState(null);
   const idCounter = useRef(200);
 
+  // Persist
   useEffect(() => { saveState(items, removedItems); }, [items, removedItems]);
   useEffect(() => { try { localStorage.setItem("book-toc-custom-prompt", customPrompt); } catch {} }, [customPrompt]);
   useEffect(() => { try { localStorage.setItem("book-toc-title", bookTitle); } catch {} }, [bookTitle]);
   useEffect(() => { try { localStorage.setItem("book-toc-types", JSON.stringify(customTypes)); } catch {} }, [customTypes]);
 
-  // Undo / Redo
+  // Group items: [{section, chapters}]
+  const groups = useMemo(() => {
+    const result = [];
+    let current = { section: null, chapters: [] };
+    for (const item of items) {
+      if (item.kind === "section") {
+        if (current.section || current.chapters.length > 0) result.push(current);
+        current = { section: item, chapters: [] };
+      } else {
+        current.chapters.push(item);
+      }
+    }
+    if (current.section || current.chapters.length > 0) result.push(current);
+    return result;
+  }, [items]);
+
+  const flattenGroups = (gs) => {
+    const r = [];
+    for (const g of gs) { if (g.section) r.push(g.section); r.push(...g.chapters); }
+    return r;
+  };
+
+  // Undo/Redo
   const pushUndo = useCallback(() => {
     setUndoStack((prev) => [...prev.slice(-(MAX_UNDO - 1)), items]);
     setRedoStack([]);
   }, [items]);
-
   const undo = useCallback(() => {
     if (undoStack.length === 0) return;
     setRedoStack((r) => [...r, items]);
     setItems(undoStack[undoStack.length - 1]);
     setUndoStack((u) => u.slice(0, -1));
   }, [undoStack, items]);
-
   const redo = useCallback(() => {
     if (redoStack.length === 0) return;
     setUndoStack((u) => [...u, items]);
     setItems(redoStack[redoStack.length - 1]);
     setRedoStack((r) => r.slice(0, -1));
   }, [redoStack, items]);
-
-  // Keyboard: Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z
   useEffect(() => {
-    const handler = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "z") {
-        e.preventDefault();
-        if (e.shiftKey) redo();
-        else undo();
-      }
+    const h = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
   }, [undo, redo]);
 
-  const getFeedback = useCallback(async (newItems) => {
-    if (!apiKey) {
-      setFeedback("API 키를 먼저 설정해줘. 메뉴 → 설정.");
-      setShowFeedbackModal(true);
-      return;
+  // Drag
+  const resetDrag = () => { setDragType(null); setDragGroupIdx(null); setDragChapterId(null); setOverGroupIdx(null); setOverChapterId(null); };
+
+  const handleGroupDragStart = (e, gi) => {
+    setDragType("group"); setDragGroupIdx(gi);
+    e.dataTransfer.effectAllowed = "move";
+  };
+  const handleChapterDragStart = (e, id) => {
+    e.stopPropagation();
+    setDragType("chapter"); setDragChapterId(id);
+    e.dataTransfer.effectAllowed = "move";
+  };
+  const handleGroupDragOver = (e, gi) => {
+    e.preventDefault();
+    if (dragType === "group") setOverGroupIdx(gi);
+  };
+  const handleChapterDragOver = (e, id) => {
+    e.preventDefault();
+    if (dragType === "chapter") { e.stopPropagation(); setOverChapterId(id); }
+  };
+  const handleGroupDrop = (targetGi) => {
+    if (dragType === "group" && dragGroupIdx !== null && dragGroupIdx !== targetGi) {
+      pushUndo();
+      const reordered = [...groups];
+      const [moved] = reordered.splice(dragGroupIdx, 1);
+      reordered.splice(targetGi, 0, moved);
+      setItems(flattenGroups(reordered));
     }
-    setShowFeedbackModal(false);
-    setLoading(true);
+    resetDrag();
+  };
+  const handleChapterDrop = (e, targetId) => {
+    if (dragType === "chapter" && dragChapterId && dragChapterId !== targetId) {
+      e.stopPropagation();
+      pushUndo();
+      const srcIdx = items.findIndex((i) => i.id === dragChapterId);
+      const updated = [...items];
+      const [moved] = updated.splice(srcIdx, 1);
+      const dstIdx = updated.findIndex((i) => i.id === targetId);
+      updated.splice(dstIdx, 0, moved);
+      setItems(updated);
+    }
+    resetDrag();
+  };
+
+  // API
+  const getFeedback = useCallback(async (newItems) => {
+    if (!apiKey) { setFeedback("API 키를 먼저 설정해줘. ≡ → 설정."); setShowFeedbackModal(true); return; }
+    setShowFeedbackModal(false); setLoading(true);
     let chNum = 0;
-    const tocText = newItems
-      .map((item) => {
-        if (item.kind === "section") return `\n── 파트: ${item.text} ──`;
-        chNum++;
-        return `  ${chNum}. [${item.type}] ${item.text}`;
-      })
-      .join("\n");
+    const tocText = newItems.map((item) => {
+      if (item.kind === "section") return `\n── 파트: ${item.text} ──`;
+      chNum++; return `  ${chNum}. [${item.type}] ${item.text}`;
+    }).join("\n");
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          system: customPrompt,
-          messages: [{ role: "user", content: `현재 목차:\n${tocText}` }],
-        }),
+        headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system: customPrompt, messages: [{ role: "user", content: `현재 목차:\n${tocText}` }] }),
       });
       const data = await res.json();
-      if (data.error) {
-        setFeedback(`API 에러: ${data.error.message}`);
-      } else {
-        const text = data.content?.map((c) => (c.type === "text" ? c.text : "")).filter(Boolean).join("\n");
-        setFeedback(text || "피드백을 가져오지 못했어.");
-      }
-    } catch (e) {
-      setFeedback("API 연결 실패 — 키를 확인하거나 다시 시도해봐.");
-    }
-    setLoading(false);
-    setShowFeedbackModal(true);
+      if (data.error) setFeedback(`API 에러: ${data.error.message}`);
+      else { const text = data.content?.map((c) => (c.type === "text" ? c.text : "")).filter(Boolean).join("\n"); setFeedback(text || "피드백을 가져오지 못했어."); }
+    } catch (e) { setFeedback("API 연결 실패 — 키를 확인하거나 다시 시도해봐."); }
+    setLoading(false); setShowFeedbackModal(true);
   }, [apiKey, customPrompt]);
 
-  // Drag — custom ghost for sections
-  const handleDragStart = (e, idx) => {
-    setDragIdx(idx);
-    e.dataTransfer.effectAllowed = "move";
-    if (items[idx].kind === "section") {
-      const end = sectionGroupEnd(items, idx);
-      const chCount = end - idx - 1;
-      const ghost = document.createElement("div");
-      ghost.style.cssText = "position:absolute;top:-1000px;background:#e8e3dd;padding:14px 20px;border-radius:8px;font-size:18px;color:#1a1a1a;font-family:system-ui;white-space:nowrap;";
-      ghost.textContent = `${items[idx].text}  +${chCount}챕터`;
-      document.body.appendChild(ghost);
-      e.dataTransfer.setDragImage(ghost, 20, 20);
-      setTimeout(() => document.body.removeChild(ghost), 100);
-    }
-  };
-  const handleDragOver = (e, idx) => { e.preventDefault(); setOverIdx(idx); };
-
-  const handleDrop = (idx) => {
-    if (dragIdx === null || dragIdx === idx) { setDragIdx(null); setOverIdx(null); return; }
-    const dragItem = items[dragIdx];
-    pushUndo();
-
-    if (dragItem.kind === "section") {
-      const dragEnd = sectionGroupEnd(items, dragIdx);
-      const groupLen = dragEnd - dragIdx;
-      if (idx >= dragIdx && idx < dragEnd) { setDragIdx(null); setOverIdx(null); return; }
-      const group = items.slice(dragIdx, dragEnd);
-      const remaining = [...items.slice(0, dragIdx), ...items.slice(dragEnd)];
-      const adjustedIdx = idx < dragIdx ? idx : idx - groupLen;
-
-      let insertAt;
-      if (idx < dragIdx) {
-        insertAt = adjustedIdx;
-      } else {
-        // Dropping down: place after the target section's full group
-        if (remaining[adjustedIdx]?.kind === "section") {
-          insertAt = sectionGroupEnd(remaining, adjustedIdx);
-        } else {
-          insertAt = adjustedIdx + 1;
-        }
-      }
-      setItems([...remaining.slice(0, insertAt), ...group, ...remaining.slice(insertAt)]);
-    } else {
-      const updated = [...items];
-      const [moved] = updated.splice(dragIdx, 1);
-      updated.splice(idx, 0, moved);
-      setItems(updated);
-    }
-    setDragIdx(null);
-    setOverIdx(null);
-  };
-  const handleDragEnd = () => { setDragIdx(null); setOverIdx(null); };
-
+  // Item operations
   const addItem = () => {
     if (!newText.trim()) return;
-    pushUndo();
-    idCounter.current += 1;
+    pushUndo(); idCounter.current += 1;
     const type = newTagInput.trim() || newType;
-    if (addMode === "chapter" && type && !customTypes.includes(type)) {
-      setCustomTypes((prev) => [...prev, type]);
-    }
+    if (addMode === "chapter" && type && !customTypes.includes(type)) setCustomTypes((prev) => [...prev, type]);
     const newItem = addMode === "section"
       ? { id: String(idCounter.current), text: newText.trim(), kind: "section" }
       : { id: String(idCounter.current), text: newText.trim(), type, kind: "chapter" };
-    setItems([...items, newItem]);
-    setNewText("");
-    setNewTagInput("");
-    setAddMode(null);
+    setItems([...items, newItem]); setNewText(""); setNewTagInput(""); setAddMode(null);
   };
-
-  const removeItem = (idx) => {
+  const removeItem = (id) => {
     pushUndo();
-    setRemovedItems((prev) => [...prev, items[idx]]);
-    setItems(items.filter((_, i) => i !== idx));
+    const item = items.find((i) => i.id === id);
+    if (item) { setRemovedItems((prev) => [...prev, item]); setItems(items.filter((i) => i.id !== id)); }
   };
   const restoreItem = (ri) => {
     pushUndo();
@@ -291,394 +257,252 @@ export default function App() {
     setRemovedItems((prev) => prev.filter((_, i) => i !== ri));
     setItems([...items, item]);
   };
-
   const startEdit = (id, text) => { setEditingId(id); setEditText(text); };
   const saveEdit = (id) => {
     pushUndo();
     setItems((prev) => prev.map((c) => (c.id === id ? { ...c, text: editText } : c)));
-    setEditingId(null);
-    setEditText("");
+    setEditingId(null); setEditText("");
   };
   const cancelEdit = () => { setEditingId(null); setEditText(""); };
-
-  const cycleType = (idx) => {
-    if (items[idx].kind === "section") return;
+  const cycleType = (id) => {
+    const item = items.find((i) => i.id === id);
+    if (!item || item.kind === "section") return;
     pushUndo();
-    const curr = customTypes.indexOf(items[idx].type);
+    const curr = customTypes.indexOf(item.type);
     const next = curr === -1 ? 0 : (curr + 1) % customTypes.length;
-    setItems((prev) => prev.map((c, i) => (i === idx ? { ...c, type: customTypes[next] } : c)));
+    setItems((prev) => prev.map((c) => (c.id === id ? { ...c, type: customTypes[next] } : c)));
   };
-
-  const saveApiKey = () => {
-    localStorage.setItem("book-toc-api-key", apiKeyInput);
-    setApiKey(apiKeyInput);
-    setShowSettings(false);
-  };
-
-  const resetAll = () => {
-    if (confirm("목차를 초기 상태로 되돌릴까?")) {
-      pushUndo();
-      setItems(INITIAL_ITEMS);
-      setRemovedItems([]);
-      setFeedback("");
-      setShowSettings(false);
-    }
-  };
-
+  const saveApiKey = () => { localStorage.setItem("book-toc-api-key", apiKeyInput); setApiKey(apiKeyInput); setShowSettings(false); };
+  const resetAll = () => { if (confirm("목차를 초기 상태로 되돌릴까?")) { pushUndo(); setItems(INITIAL_ITEMS); setRemovedItems([]); setFeedback(""); setShowSettings(false); } };
   const exportToc = () => {
     let chNum = 0;
-    const text = items.map((item) => {
-      if (item.kind === "section") return `\n━━ ${item.text} ━━`;
-      chNum++;
-      return `  ${chNum}. [${item.type}] ${item.text}`;
-    }).join("\n");
+    const text = items.map((item) => { if (item.kind === "section") return `\n━━ ${item.text} ━━`; chNum++; return `  ${chNum}. [${item.type}] ${item.text}`; }).join("\n");
     const blob = new Blob([`${bookTitle}\n목차\n${"═".repeat(40)}\n${text}\n`], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "목차.txt";
-    a.click();
-    URL.revokeObjectURL(url);
+    const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "목차.txt"; a.click(); URL.revokeObjectURL(url);
   };
-
-  const toggleFullscreen = () => {
-    if (document.fullscreenElement) document.exitFullscreen();
-    else document.documentElement.requestFullscreen();
-  };
-
+  const toggleFullscreen = () => { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); };
   const startTitleEdit = () => { setEditingTitle(true); setTitleInput(bookTitle); };
-  const saveTitleEdit = () => {
-    if (titleInput.trim()) setBookTitle(titleInput.trim());
-    setEditingTitle(false);
-  };
+  const saveTitleEdit = () => { if (titleInput.trim()) setBookTitle(titleInput.trim()); setEditingTitle(false); };
 
+  // Stats
   const chapters = items.filter((i) => i.kind === "chapter");
   const sectionsList = items.filter((i) => i.kind === "section");
   const stats = chapters.reduce((a, c) => { a[c.type] = (a[c.type] || 0) + 1; return a; }, {});
   let chapterCount = 0;
   let sectionCount = 0;
 
-  // Drag group visual range
-  let dragGroupEnd = null;
-  if (dragIdx !== null && items[dragIdx]?.kind === "section") {
-    dragGroupEnd = sectionGroupEnd(items, dragIdx);
-  }
-
-  const backdrop = {
-    position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)",
-    display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
-  };
-  const modalBox = {
-    background: "#F5F0EB", borderRadius: 16, padding: "36px 40px",
-    width: "92%", maxWidth: 640, maxHeight: "85vh", overflowY: "auto",
-    boxShadow: "0 8px 32px rgba(0,0,0,0.15)",
-  };
-  const drawerBtn = {
-    display: "block", width: "100%", textAlign: "left",
-    fontSize: 18, padding: "14px 0", background: "none", border: "none",
-    color: "#1a1a1a", cursor: "pointer", fontFamily: "inherit",
-  };
-  const headerBtn = {
-    width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center",
-    background: "none", border: "1px solid #ddd", borderRadius: 6,
-    color: "#888", cursor: "pointer", fontSize: 16, flexShrink: 0,
-  };
-
+  const backdrop = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 };
+  const modalBox = { background: "#F5F0EB", borderRadius: 16, padding: "36px 40px", width: "92%", maxWidth: 640, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 8px 32px rgba(0,0,0,0.15)" };
+  const drawerBtn = { display: "block", width: "100%", textAlign: "left", fontSize: 18, padding: "14px 0", background: "none", border: "none", color: "#1a1a1a", cursor: "pointer", fontFamily: "inherit" };
+  const headerBtn = { width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", background: "none", border: "1px solid #ddd", borderRadius: 6, color: "#888", cursor: "pointer", fontSize: 16, flexShrink: 0 };
   const fs = compact ? 14 : 22;
 
+  // Render a chapter row
+  const renderChapter = (ch, isDragOver) => {
+    const isChDragging = dragType === "chapter" && dragChapterId === ch.id;
+    chapterCount++;
+    const num = chapterCount;
+    return (
+      <div key={ch.id} draggable
+        onDragStart={(e) => handleChapterDragStart(e, ch.id)}
+        onDragOver={(e) => handleChapterDragOver(e, ch.id)}
+        onDrop={(e) => handleChapterDrop(e, ch.id)}
+        onDragEnd={resetDrag}
+        style={{
+          display: "flex", alignItems: "flex-start", gap: compact ? 6 : 10,
+          padding: compact ? "3px 8px" : "8px 16px",
+          background: isChDragging ? "#e8e3dd" : isDragOver ? "#ede8e2" : "transparent",
+          opacity: isChDragging ? 0.4 : 1,
+          borderRadius: 6, cursor: "grab",
+          borderLeft: (dragType === "chapter" && overChapterId === ch.id) ? "4px solid #1a1a1a" : "4px solid transparent",
+          transition: "background 0.15s, opacity 0.15s",
+        }}>
+        <span style={{ fontSize: compact ? 12 : 18, color: "#bbb", minWidth: compact ? 20 : 32, paddingTop: compact ? 1 : 2, textAlign: "right", userSelect: "none", flexShrink: 0 }}>{num}</span>
+        <button onClick={() => cycleType(ch.id)} title="클릭해서 타입 변경"
+          style={{ fontSize: compact ? 11 : 14, padding: compact ? "1px 5px" : "3px 10px", border: "1px solid #ccc", borderRadius: compact ? 3 : 4, background: "transparent", color: "#888", cursor: "pointer", flexShrink: 0, marginTop: compact ? 1 : 2 }}>
+          {ch.type}
+        </button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {editingId === ch.id ? (
+            <div style={{ display: "flex", gap: 10 }}>
+              <input value={editText} onChange={(e) => setEditText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") saveEdit(ch.id); if (e.key === "Escape") cancelEdit(); }} autoFocus
+                style={{ flex: 1, fontSize: fs, padding: "6px 12px", border: "1px solid #ccc", borderRadius: 6, background: "#fff", outline: "none", fontFamily: "inherit" }} />
+              <button onClick={() => saveEdit(ch.id)} style={{ fontSize: 16, padding: "6px 18px", border: "1px solid #1a1a1a", borderRadius: 6, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>저장</button>
+            </div>
+          ) : (
+            <span onClick={() => startEdit(ch.id, ch.text)} style={{ fontSize: fs, lineHeight: compact ? 1.35 : 1.4, cursor: "text", wordBreak: "keep-all" }}>{ch.text}</span>
+          )}
+        </div>
+        {!compact && (
+          <button onClick={() => removeItem(ch.id)} style={{ fontSize: 22, background: "none", border: "none", color: "#ddd", cursor: "pointer", padding: "0 6px", flexShrink: 0, lineHeight: 1 }}>×</button>
+        )}
+      </div>
+    );
+  };
+
   return (
-    <div style={{
-      fontFamily: "'Pretendard', -apple-system, 'Apple SD Gothic Neo', sans-serif",
-      background: "#F5F0EB", minHeight: "100vh", color: "#1a1a1a",
-    }}>
-      {/* ===== MODALS ===== */}
+    <div style={{ fontFamily: "'Pretendard', -apple-system, 'Apple SD Gothic Neo', sans-serif", background: "#F5F0EB", minHeight: "100vh", color: "#1a1a1a" }}>
+
+      {/* MODALS */}
       {showSettings && (
         <div style={backdrop} onClick={() => setShowSettings(false)}>
           <div style={modalBox} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 32 }}>
               <h2 style={{ fontSize: 28, fontWeight: 700, margin: 0 }}>설정</h2>
-              <button onClick={() => setShowSettings(false)}
-                style={{ fontSize: 28, background: "none", border: "none", color: "#aaa", cursor: "pointer" }}>×</button>
+              <button onClick={() => setShowSettings(false)} style={{ fontSize: 28, background: "none", border: "none", color: "#aaa", cursor: "pointer" }}>×</button>
             </div>
             <label style={{ fontSize: 18, color: "#666", display: "block", marginBottom: 10 }}>Anthropic API 키</label>
-            <input type="password" value={apiKeyInput} onChange={(e) => setApiKeyInput(e.target.value)}
-              placeholder="sk-ant-..."
-              style={{
-                width: "100%", fontSize: 20, padding: "14px 18px",
-                border: "1px solid #ddd", borderRadius: 8, outline: "none",
-                fontFamily: "monospace", background: "#fff", boxSizing: "border-box",
-              }} />
+            <input type="password" value={apiKeyInput} onChange={(e) => setApiKeyInput(e.target.value)} placeholder="sk-ant-..."
+              style={{ width: "100%", fontSize: 20, padding: "14px 18px", border: "1px solid #ddd", borderRadius: 8, outline: "none", fontFamily: "monospace", background: "#fff", boxSizing: "border-box" }} />
             <p style={{ fontSize: 15, color: "#aaa", marginTop: 8 }}>키는 브라우저 localStorage에만 저장됩니다.</p>
-            <button onClick={saveApiKey}
-              style={{ fontSize: 18, padding: "12px 32px", border: "1px solid #1a1a1a", borderRadius: 8, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer", marginTop: 12 }}>저장</button>
+            <button onClick={saveApiKey} style={{ fontSize: 18, padding: "12px 32px", border: "1px solid #1a1a1a", borderRadius: 8, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer", marginTop: 12 }}>저장</button>
             <div style={{ borderTop: "1px solid #e8e3dd", marginTop: 32, paddingTop: 28 }}>
-              <button onClick={resetAll}
-                style={{ fontSize: 18, padding: "12px 24px", border: "1px solid #ddd", borderRadius: 8, background: "transparent", color: "#c44", cursor: "pointer" }}>
-                목차 초기화
-              </button>
+              <button onClick={resetAll} style={{ fontSize: 18, padding: "12px 24px", border: "1px solid #ddd", borderRadius: 8, background: "transparent", color: "#c44", cursor: "pointer" }}>목차 초기화</button>
             </div>
           </div>
         </div>
       )}
-
       {showPromptEditor && (
         <div style={backdrop} onClick={() => setShowPromptEditor(false)}>
           <div style={modalBox} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
               <h2 style={{ fontSize: 28, fontWeight: 700, margin: 0 }}>프롬프트 편집</h2>
-              <button onClick={() => setShowPromptEditor(false)}
-                style={{ fontSize: 28, background: "none", border: "none", color: "#aaa", cursor: "pointer" }}>×</button>
+              <button onClick={() => setShowPromptEditor(false)} style={{ fontSize: 28, background: "none", border: "none", color: "#aaa", cursor: "pointer" }}>×</button>
             </div>
             <textarea value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)}
-              style={{
-                width: "100%", height: 300, fontSize: 18, lineHeight: 1.7,
-                padding: "18px 20px", border: "1px solid #ddd", borderRadius: 10,
-                background: "#fff", outline: "none", fontFamily: "inherit",
-                resize: "vertical", boxSizing: "border-box", color: "#1a1a1a",
-              }} />
+              style={{ width: "100%", height: 300, fontSize: 18, lineHeight: 1.7, padding: "18px 20px", border: "1px solid #ddd", borderRadius: 10, background: "#fff", outline: "none", fontFamily: "inherit", resize: "vertical", boxSizing: "border-box", color: "#1a1a1a" }} />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16 }}>
-              <button onClick={() => setCustomPrompt(SYSTEM_PROMPT)}
-                style={{ fontSize: 16, background: "none", border: "none", color: "#aaa", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
-                기본값으로 되돌리기
-              </button>
-              <button onClick={() => setShowPromptEditor(false)}
-                style={{ fontSize: 18, padding: "12px 32px", border: "1px solid #1a1a1a", borderRadius: 8, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>완료</button>
+              <button onClick={() => setCustomPrompt(SYSTEM_PROMPT)} style={{ fontSize: 16, background: "none", border: "none", color: "#aaa", cursor: "pointer", padding: 0, textDecoration: "underline" }}>기본값으로 되돌리기</button>
+              <button onClick={() => setShowPromptEditor(false)} style={{ fontSize: 18, padding: "12px 32px", border: "1px solid #1a1a1a", borderRadius: 8, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>완료</button>
             </div>
           </div>
         </div>
       )}
-
       {showFeedbackModal && feedback && (
         <div style={backdrop} onClick={() => setShowFeedbackModal(false)}>
           <div style={modalBox} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
               <span style={{ fontSize: 24, fontWeight: 700 }}>AI 편집자 피드백</span>
-              <button onClick={() => setShowFeedbackModal(false)}
-                style={{ fontSize: 28, background: "none", border: "none", color: "#aaa", cursor: "pointer" }}>×</button>
+              <button onClick={() => setShowFeedbackModal(false)} style={{ fontSize: 28, background: "none", border: "none", color: "#aaa", cursor: "pointer" }}>×</button>
             </div>
-            <div style={{ fontSize: 22, lineHeight: 1.7, color: "#1a1a1a", wordBreak: "keep-all", whiteSpace: "pre-wrap" }}>
-              {feedback}
-            </div>
+            <div style={{ fontSize: 22, lineHeight: 1.7, color: "#1a1a1a", wordBreak: "keep-all", whiteSpace: "pre-wrap" }}>{feedback}</div>
           </div>
         </div>
       )}
 
-      {/* ===== SIDE DRAWER ===== */}
+      {/* SIDE DRAWER */}
       {showDrawer && (
         <>
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.12)", zIndex: 200 }}
-            onClick={() => setShowDrawer(false)} />
-          <div style={{
-            position: "fixed", top: 0, right: 0, bottom: 0, width: 300,
-            background: "#F5F0EB", borderLeft: "1px solid #e8e3dd",
-            padding: "28px 28px", zIndex: 201,
-            boxShadow: "-4px 0 24px rgba(0,0,0,0.06)", overflowY: "auto",
-          }}>
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.12)", zIndex: 200 }} onClick={() => setShowDrawer(false)} />
+          <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: 300, background: "#F5F0EB", borderLeft: "1px solid #e8e3dd", padding: "28px", zIndex: 201, boxShadow: "-4px 0 24px rgba(0,0,0,0.06)", overflowY: "auto" }}>
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
-              <button onClick={() => setShowDrawer(false)}
-                style={{ fontSize: 24, background: "none", border: "none", color: "#aaa", cursor: "pointer" }}>×</button>
+              <button onClick={() => setShowDrawer(false)} style={{ fontSize: 24, background: "none", border: "none", color: "#aaa", cursor: "pointer" }}>×</button>
             </div>
             <div style={{ marginBottom: 32, fontSize: 16, color: "#888", lineHeight: 2 }}>
               <div>파트 {sectionsList.length}</div>
-              {Object.entries(stats).map(([type, count]) => (
-                <span key={type} style={{ marginRight: 16 }}>{type} {count}</span>
-              ))}
+              {Object.entries(stats).map(([type, count]) => (<span key={type} style={{ marginRight: 16 }}>{type} {count}</span>))}
               <div style={{ color: "#bbb", marginTop: 4 }}>총 {chapters.length}개 챕터</div>
             </div>
             <div style={{ borderTop: "1px solid #e8e3dd", paddingTop: 8 }}>
               <button style={drawerBtn} onClick={() => { setShowDrawer(false); setShowPromptEditor(true); }}>프롬프트</button>
-              <button style={{ ...drawerBtn, color: loading ? "#bbb" : "#1a1a1a" }} disabled={loading}
-                onClick={() => { setShowDrawer(false); getFeedback(items); }}>
-                {loading ? "생각 중..." : "피드백 받기"}
-              </button>
+              <button style={{ ...drawerBtn, color: loading ? "#bbb" : "#1a1a1a" }} disabled={loading} onClick={() => { setShowDrawer(false); getFeedback(items); }}>{loading ? "생각 중..." : "피드백 받기"}</button>
               <button style={drawerBtn} onClick={() => { exportToc(); setShowDrawer(false); }}>내보내기</button>
             </div>
             <div style={{ borderTop: "1px solid #e8e3dd", marginTop: 8, paddingTop: 8 }}>
-              <button style={{ ...drawerBtn, color: "#888" }}
-                onClick={() => { setShowDrawer(false); setShowSettings(true); }}>설정</button>
+              <button style={{ ...drawerBtn, color: "#888" }} onClick={() => { setShowDrawer(false); setShowSettings(true); }}>설정</button>
             </div>
           </div>
         </>
       )}
 
-      {/* ===== HEADER ===== */}
-      <div style={{
-        position: "sticky", top: 0, background: "#F5F0EB", zIndex: 50,
-        padding: compact ? "10px 32px" : "20px 32px",
-        borderBottom: "1px solid #e8e3dd",
-      }}>
-        <div style={{
-          maxWidth: compact ? 1200 : 860, margin: "0 auto",
-          display: "flex", justifyContent: "space-between", alignItems: "center",
-        }}>
-          {/* Left: undo/redo + title */}
+      {/* HEADER */}
+      <div style={{ position: "sticky", top: 0, background: "#F5F0EB", zIndex: 50, padding: compact ? "10px 32px" : "20px 32px", borderBottom: "1px solid #e8e3dd" }}>
+        <div style={{ maxWidth: compact ? 1200 : 860, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
-            <button onClick={undo} disabled={undoStack.length === 0} title="되돌리기 (Cmd+Z)"
-              style={{ ...headerBtn, color: undoStack.length ? "#666" : "#ddd", borderColor: undoStack.length ? "#ccc" : "#eee" }}>↩</button>
-            <button onClick={redo} disabled={redoStack.length === 0} title="다시 실행 (Cmd+Shift+Z)"
-              style={{ ...headerBtn, color: redoStack.length ? "#666" : "#ddd", borderColor: redoStack.length ? "#ccc" : "#eee" }}>↪</button>
-            <div style={{ width: 8 }} />
             {editingTitle && !compact ? (
               <div style={{ display: "flex", gap: 10, alignItems: "center", flex: 1 }}>
                 <input value={titleInput} onChange={(e) => setTitleInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") saveTitleEdit(); if (e.key === "Escape") setEditingTitle(false); }}
-                  autoFocus
-                  style={{
-                    flex: 1, fontSize: 28, fontWeight: 700, padding: "6px 14px",
-                    border: "1px solid #ccc", borderRadius: 8, background: "#fff",
-                    outline: "none", fontFamily: "inherit", letterSpacing: "-0.02em",
-                  }} />
-                <button onClick={saveTitleEdit}
-                  style={{ fontSize: 16, padding: "8px 20px", border: "1px solid #1a1a1a", borderRadius: 8, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>저장</button>
+                  onKeyDown={(e) => { if (e.key === "Enter") saveTitleEdit(); if (e.key === "Escape") setEditingTitle(false); }} autoFocus
+                  style={{ flex: 1, fontSize: 28, fontWeight: 700, padding: "6px 14px", border: "1px solid #ccc", borderRadius: 8, background: "#fff", outline: "none", fontFamily: "inherit", letterSpacing: "-0.02em" }} />
+                <button onClick={saveTitleEdit} style={{ fontSize: 16, padding: "8px 20px", border: "1px solid #1a1a1a", borderRadius: 8, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>저장</button>
               </div>
             ) : (
-              <h1 onClick={() => !compact && startTitleEdit()}
-                style={{
-                  fontSize: compact ? 16 : 28, fontWeight: 700, letterSpacing: "-0.02em",
-                  margin: 0, lineHeight: 1.3, cursor: compact ? "default" : "text",
-                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                }}>
-                {bookTitle}
-              </h1>
+              <h1 onClick={() => !compact && startTitleEdit()} style={{ fontSize: compact ? 16 : 28, fontWeight: 700, letterSpacing: "-0.02em", margin: 0, lineHeight: 1.3, cursor: compact ? "default" : "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bookTitle}</h1>
             )}
           </div>
-
-          {/* Right: mode + fullscreen + menu */}
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
-            <button onClick={() => setCompact(!compact)}
-              style={{
-                fontSize: 13, padding: "6px 14px", height: 32,
-                background: "none", border: "1px solid #ddd", borderRadius: 6,
-                color: "#666", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
-              }}>
-              {compact ? "편집" : "전체"}
-            </button>
+            <button onClick={undo} disabled={!undoStack.length} title="되돌리기 (Cmd+Z)" style={{ ...headerBtn, color: undoStack.length ? "#666" : "#ddd", borderColor: undoStack.length ? "#ccc" : "#eee" }}>↩</button>
+            <button onClick={redo} disabled={!redoStack.length} title="다시 실행 (Cmd+Shift+Z)" style={{ ...headerBtn, color: redoStack.length ? "#666" : "#ddd", borderColor: redoStack.length ? "#ccc" : "#eee" }}>↪</button>
+            <button onClick={() => setCompact(!compact)} style={{ fontSize: 13, padding: "6px 14px", height: 32, background: "none", border: "1px solid #ddd", borderRadius: 6, color: "#666", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>{compact ? "편집" : "전체"}</button>
             <button onClick={toggleFullscreen} title="풀스크린" style={headerBtn}>⛶</button>
             <button onClick={() => setShowDrawer(true)} title="메뉴" style={{ ...headerBtn, fontSize: 18 }}>≡</button>
           </div>
         </div>
       </div>
 
-      {/* ===== MAIN CONTENT ===== */}
-      <div style={{
-        maxWidth: compact ? 1200 : 860, margin: "0 auto",
-        padding: compact ? "16px 40px 40px" : "24px 32px 80px",
-        columnCount: compact ? 2 : 1,
-        columnGap: compact ? 48 : 0,
-      }}>
-        {items.map((item, idx) => {
-          const isSection = item.kind === "section";
-          if (isSection) sectionCount++;
-          if (!isSection) chapterCount++;
-          const num = isSection ? null : chapterCount;
-          const secNum = isSection ? sectionCount : null;
-          const isDragging = dragIdx === idx;
-          const isOver = overIdx === idx;
-          const isInDragGroup = dragGroupEnd !== null && idx > dragIdx && idx < dragGroupEnd;
+      {/* MAIN CONTENT — grouped rendering */}
+      <div style={{ maxWidth: compact ? 1200 : 860, margin: "0 auto", padding: compact ? "16px 40px 40px" : "24px 32px 80px", columnCount: compact ? 2 : 1, columnGap: compact ? 48 : 0 }}>
+        {groups.map((group, gi) => {
+          const isGroupDragging = dragType === "group" && dragGroupIdx === gi;
+          const isGroupOver = dragType === "group" && overGroupIdx === gi && dragGroupIdx !== gi;
 
-          if (isSection) {
-            return (
-              <div key={item.id} draggable
-                onDragStart={(e) => handleDragStart(e, idx)}
-                onDragOver={(e) => handleDragOver(e, idx)}
-                onDrop={() => handleDrop(idx)} onDragEnd={handleDragEnd}
-                style={{
-                  display: "flex", alignItems: "flex-start",
-                  gap: compact ? 6 : 10,
-                  padding: compact ? "10px 8px 4px" : "20px 16px 8px",
-                  marginTop: idx === 0 ? 0 : (compact ? 6 : 12),
-                  marginBottom: compact ? 2 : 4,
-                  cursor: "grab",
-                  borderTop: idx === 0 ? "none" : "1px solid #ddd6ce",
-                  background: isDragging ? "#e8e3dd" : isOver ? "#ede8e2" : "transparent",
-                  opacity: isDragging ? 0.4 : 1,
-                  borderLeft: isOver ? "4px solid #1a1a1a" : "4px solid transparent",
-                  borderRadius: 6, transition: "background 0.15s, opacity 0.15s",
-                  breakInside: "avoid",
-                }}>
-                <span style={{
-                  fontSize: compact ? 12 : 18, color: "#aaa",
-                  minWidth: compact ? 44 : 66, paddingTop: compact ? 1 : 2,
-                  textAlign: "right", userSelect: "none", flexShrink: 0,
-                }}>파트{secNum}</span>
+          // Orphan chapters (no section)
+          if (!group.section) {
+            return group.chapters.map((ch) => renderChapter(ch, false));
+          }
+
+          sectionCount++;
+          const secNum = sectionCount;
+          const sec = group.section;
+
+          return (
+            <div key={sec.id} draggable
+              onDragStart={(e) => handleGroupDragStart(e, gi)}
+              onDragOver={(e) => handleGroupDragOver(e, gi)}
+              onDrop={() => handleGroupDrop(gi)}
+              onDragEnd={resetDrag}
+              style={{
+                opacity: isGroupDragging ? 0.35 : 1,
+                borderTop: (gi > 0 || items[0]?.kind !== "section") ? "1px solid #ddd6ce" : "none",
+                marginTop: gi === 0 && !group.chapters.length ? 0 : (compact ? 6 : 12),
+                borderRadius: 8,
+                background: isGroupOver ? "#ede8e2" : "transparent",
+                outline: "none",
+                transition: "opacity 0.15s, background 0.15s",
+                cursor: "grab",
+                breakInside: "avoid",
+              }}>
+              {/* Section header */}
+              <div style={{
+                display: "flex", alignItems: "flex-start", gap: compact ? 6 : 10,
+                padding: compact ? "10px 8px 4px" : "20px 16px 8px",
+                marginBottom: compact ? 2 : 4,
+              }}>
+                <span style={{ fontSize: compact ? 12 : 18, color: "#aaa", minWidth: compact ? 44 : 66, paddingTop: compact ? 1 : 2, textAlign: "right", userSelect: "none", flexShrink: 0 }}>파트{secNum}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  {editingId === item.id ? (
+                  {editingId === sec.id ? (
                     <div style={{ display: "flex", gap: 10 }}>
                       <input value={editText} onChange={(e) => setEditText(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter") saveEdit(item.id); if (e.key === "Escape") cancelEdit(); }} autoFocus
+                        onKeyDown={(e) => { if (e.key === "Enter") saveEdit(sec.id); if (e.key === "Escape") cancelEdit(); }} autoFocus
                         style={{ flex: 1, fontSize: fs, fontWeight: 700, padding: "6px 12px", border: "1px solid #ccc", borderRadius: 6, background: "#fff", outline: "none", fontFamily: "inherit" }} />
-                      <button onClick={() => saveEdit(item.id)}
-                        style={{ fontSize: 16, padding: "6px 18px", border: "1px solid #1a1a1a", borderRadius: 6, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>저장</button>
+                      <button onClick={() => saveEdit(sec.id)} style={{ fontSize: 16, padding: "6px 18px", border: "1px solid #1a1a1a", borderRadius: 6, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>저장</button>
                     </div>
                   ) : (
-                    <span onClick={() => startEdit(item.id, item.text)}
-                      style={{ fontSize: fs, fontWeight: 700, lineHeight: compact ? 1.35 : 1.4, cursor: "text" }}>
-                      {item.text}
-                    </span>
+                    <span onClick={() => startEdit(sec.id, sec.text)} style={{ fontSize: fs, fontWeight: 700, lineHeight: compact ? 1.35 : 1.4, cursor: "text" }}>{sec.text}</span>
                   )}
                 </div>
                 {!compact && (
-                  <button onClick={() => removeItem(idx)}
-                    style={{ fontSize: 22, background: "none", border: "none", color: "#ddd", cursor: "pointer", padding: "0 6px", flexShrink: 0 }}>×</button>
+                  <button onClick={() => removeItem(sec.id)} style={{ fontSize: 22, background: "none", border: "none", color: "#ddd", cursor: "pointer", padding: "0 6px", flexShrink: 0 }}>×</button>
                 )}
               </div>
-            );
-          }
-
-          return (
-            <div key={item.id} draggable
-              onDragStart={(e) => handleDragStart(e, idx)}
-              onDragOver={(e) => handleDragOver(e, idx)}
-              onDrop={() => handleDrop(idx)} onDragEnd={handleDragEnd}
-              style={{
-                display: "flex", alignItems: "flex-start",
-                gap: compact ? 6 : 10,
-                padding: compact ? "3px 8px" : "8px 16px",
-                marginBottom: 0,
-                background: (isDragging || isInDragGroup) ? "#e8e3dd" : isOver ? "#ede8e2" : "transparent",
-                opacity: (isDragging || isInDragGroup) ? 0.4 : 1,
-                borderRadius: 6, cursor: "grab",
-                transition: "background 0.15s, opacity 0.15s",
-                borderLeft: isOver ? "4px solid #1a1a1a" : "4px solid transparent",
-                breakInside: "avoid",
-              }}>
-              <span style={{
-                fontSize: compact ? 12 : 18, color: "#bbb",
-                minWidth: compact ? 20 : 32, paddingTop: compact ? 1 : 2,
-                textAlign: "right", userSelect: "none", flexShrink: 0,
-              }}>{num}</span>
-              <button onClick={() => cycleType(idx)} title="클릭해서 타입 변경"
-                style={{
-                  fontSize: compact ? 11 : 14, padding: compact ? "1px 5px" : "3px 10px",
-                  border: "1px solid #ccc", borderRadius: compact ? 3 : 4,
-                  background: "transparent", color: "#888", cursor: "pointer",
-                  flexShrink: 0, marginTop: compact ? 1 : 2,
-                }}>
-                {item.type}
-              </button>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                {editingId === item.id ? (
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <input value={editText} onChange={(e) => setEditText(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") saveEdit(item.id); if (e.key === "Escape") cancelEdit(); }} autoFocus
-                      style={{ flex: 1, fontSize: fs, padding: "6px 12px", border: "1px solid #ccc", borderRadius: 6, background: "#fff", outline: "none", fontFamily: "inherit" }} />
-                    <button onClick={() => saveEdit(item.id)}
-                      style={{ fontSize: 16, padding: "6px 18px", border: "1px solid #1a1a1a", borderRadius: 6, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>저장</button>
-                  </div>
-                ) : (
-                  <span onClick={() => startEdit(item.id, item.text)}
-                    style={{ fontSize: fs, lineHeight: compact ? 1.35 : 1.4, cursor: "text", wordBreak: "keep-all" }}>{item.text}</span>
-                )}
-              </div>
-              {!compact && (
-                <button onClick={() => removeItem(idx)}
-                  style={{ fontSize: 22, background: "none", border: "none", color: "#ddd", cursor: "pointer", padding: "0 6px", flexShrink: 0, lineHeight: 1 }}>×</button>
-              )}
+              {/* Chapters */}
+              {group.chapters.map((ch) => renderChapter(ch, false))}
             </div>
           );
         })}
 
-        {/* Add area — edit mode only */}
+        {/* Add area */}
         {!compact && (
           <>
             {addMode ? (
@@ -692,58 +516,33 @@ export default function App() {
                     <>
                       {customTypes.map((t) => (
                         <button key={t} onClick={() => { setNewType(t); setNewTagInput(""); }}
-                          style={{
-                            fontSize: 18, padding: "8px 20px",
-                            border: (newType === t && !newTagInput) ? "1px solid #1a1a1a" : "1px solid #ddd",
-                            borderRadius: 6,
-                            background: (newType === t && !newTagInput) ? "#1a1a1a" : "transparent",
-                            color: (newType === t && !newTagInput) ? "#F5F0EB" : "#888",
-                            cursor: "pointer",
-                          }}>
-                          {t}
-                        </button>
+                          style={{ fontSize: 18, padding: "8px 20px", border: (newType === t && !newTagInput) ? "1px solid #1a1a1a" : "1px solid #ddd", borderRadius: 6, background: (newType === t && !newTagInput) ? "#1a1a1a" : "transparent", color: (newType === t && !newTagInput) ? "#F5F0EB" : "#888", cursor: "pointer" }}>{t}</button>
                       ))}
-                      <input value={newTagInput} onChange={(e) => setNewTagInput(e.target.value)}
-                        placeholder="+ 새 태그"
-                        style={{
-                          fontSize: 18, padding: "8px 16px", width: 140,
-                          border: newTagInput ? "1px solid #1a1a1a" : "1px solid #ddd",
-                          borderRadius: 6, outline: "none", fontFamily: "inherit",
-                          background: newTagInput ? "#1a1a1a" : "transparent",
-                          color: newTagInput ? "#F5F0EB" : "#888",
-                        }} />
+                      <input value={newTagInput} onChange={(e) => setNewTagInput(e.target.value)} placeholder="+ 새 태그"
+                        style={{ fontSize: 18, padding: "8px 16px", width: 140, border: newTagInput ? "1px solid #1a1a1a" : "1px solid #ddd", borderRadius: 6, outline: "none", fontFamily: "inherit", background: newTagInput ? "#1a1a1a" : "transparent", color: newTagInput ? "#F5F0EB" : "#888" }} />
                     </>
                   )}
                   <div style={{ flex: 1 }} />
-                  <button onClick={() => { setAddMode(null); setNewText(""); setNewTagInput(""); }}
-                    style={{ fontSize: 18, padding: "8px 20px", border: "none", background: "none", color: "#aaa", cursor: "pointer" }}>취소</button>
-                  <button onClick={addItem}
-                    style={{ fontSize: 18, padding: "10px 28px", border: "1px solid #1a1a1a", borderRadius: 6, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>추가</button>
+                  <button onClick={() => { setAddMode(null); setNewText(""); setNewTagInput(""); }} style={{ fontSize: 18, padding: "8px 20px", border: "none", background: "none", color: "#aaa", cursor: "pointer" }}>취소</button>
+                  <button onClick={addItem} style={{ fontSize: 18, padding: "10px 28px", border: "1px solid #1a1a1a", borderRadius: 6, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>추가</button>
                 </div>
               </div>
             ) : (
               <div style={{ display: "flex", gap: 12, marginTop: 20, marginBottom: 20 }}>
-                <button onClick={() => setAddMode("chapter")}
-                  style={{ flex: 1, fontSize: 20, padding: "16px 24px", border: "1px dashed #ccc", borderRadius: 8, background: "transparent", color: "#999", cursor: "pointer" }}>+ 챕터</button>
-                <button onClick={() => setAddMode("section")}
-                  style={{ flex: 1, fontSize: 20, padding: "16px 24px", border: "1px dashed #ccc", borderRadius: 8, background: "transparent", color: "#999", cursor: "pointer", fontWeight: 600 }}>+ 파트</button>
+                <button onClick={() => setAddMode("chapter")} style={{ flex: 1, fontSize: 20, padding: "16px 24px", border: "1px dashed #ccc", borderRadius: 8, background: "transparent", color: "#999", cursor: "pointer" }}>+ 챕터</button>
+                <button onClick={() => setAddMode("section")} style={{ flex: 1, fontSize: 20, padding: "16px 24px", border: "1px dashed #ccc", borderRadius: 8, background: "transparent", color: "#999", cursor: "pointer", fontWeight: 600 }}>+ 파트</button>
               </div>
             )}
-
             {removedItems.length > 0 && (
               <div style={{ marginTop: 12, marginBottom: 20 }}>
-                <button onClick={() => setShowRemoved(!showRemoved)}
-                  style={{ fontSize: 18, background: "none", border: "none", color: "#aaa", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
-                  빠진 항목 {removedItems.length}개 {showRemoved ? "숨기기" : "보기"}
-                </button>
+                <button onClick={() => setShowRemoved(!showRemoved)} style={{ fontSize: 18, background: "none", border: "none", color: "#aaa", cursor: "pointer", padding: 0, textDecoration: "underline" }}>빠진 항목 {removedItems.length}개 {showRemoved ? "숨기기" : "보기"}</button>
                 {showRemoved && (
                   <div style={{ marginTop: 12 }}>
                     {removedItems.map((item, ri) => (
                       <div key={item.id + "-rm"} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", fontSize: 20, color: "#aaa" }}>
                         {item.kind === "section" && <span style={{ fontSize: 14, border: "1px solid #ddd", borderRadius: 5, padding: "2px 8px", color: "#bbb" }}>파트</span>}
                         <span style={{ flex: 1, textDecoration: "line-through" }}>{item.text}</span>
-                        <button onClick={() => restoreItem(ri)}
-                          style={{ fontSize: 18, padding: "6px 18px", border: "1px solid #ddd", borderRadius: 6, background: "transparent", color: "#888", cursor: "pointer" }}>복원</button>
+                        <button onClick={() => restoreItem(ri)} style={{ fontSize: 18, padding: "6px 18px", border: "1px solid #ddd", borderRadius: 6, background: "transparent", color: "#888", cursor: "pointer" }}>복원</button>
                       </div>
                     ))}
                   </div>
