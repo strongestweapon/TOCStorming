@@ -48,6 +48,7 @@ const INITIAL_ITEMS = [
 ];
 
 const DEFAULT_TYPES = ["에세이", "기술", "사례"];
+const MAX_UNDO = 10;
 
 const SYSTEM_PROMPT = `당신은 "노인을 위한 AI는 없다?"라는 책의 목차 편집을 도와주는 편집자입니다.
 이 책의 저자는 인공위성을 개인으로서 세계 최초로 쏘아올린 미디어 아티스트 송호준(호호)입니다.
@@ -75,6 +76,13 @@ function saveState(items, removed) {
   try {
     localStorage.setItem("book-toc-state", JSON.stringify({ items, removed }));
   } catch {}
+}
+
+// Helper: find end of a section's group
+function sectionGroupEnd(items, secIdx) {
+  let end = secIdx + 1;
+  while (end < items.length && items[end].kind !== "section") end++;
+  return end;
 }
 
 export default function App() {
@@ -114,12 +122,47 @@ export default function App() {
   });
   const [compact, setCompact] = useState(false);
   const [showDrawer, setShowDrawer] = useState(false);
+  const [undoStack, setUndoStack] = useState([]);
+  const [redoStack, setRedoStack] = useState([]);
   const idCounter = useRef(200);
 
   useEffect(() => { saveState(items, removedItems); }, [items, removedItems]);
   useEffect(() => { try { localStorage.setItem("book-toc-custom-prompt", customPrompt); } catch {} }, [customPrompt]);
   useEffect(() => { try { localStorage.setItem("book-toc-title", bookTitle); } catch {} }, [bookTitle]);
   useEffect(() => { try { localStorage.setItem("book-toc-types", JSON.stringify(customTypes)); } catch {} }, [customTypes]);
+
+  // Undo / Redo
+  const pushUndo = useCallback(() => {
+    setUndoStack((prev) => [...prev.slice(-(MAX_UNDO - 1)), items]);
+    setRedoStack([]);
+  }, [items]);
+
+  const undo = useCallback(() => {
+    if (undoStack.length === 0) return;
+    setRedoStack((r) => [...r, items]);
+    setItems(undoStack[undoStack.length - 1]);
+    setUndoStack((u) => u.slice(0, -1));
+  }, [undoStack, items]);
+
+  const redo = useCallback(() => {
+    if (redoStack.length === 0) return;
+    setUndoStack((u) => [...u, items]);
+    setItems(redoStack[redoStack.length - 1]);
+    setRedoStack((r) => r.slice(0, -1));
+  }, [redoStack, items]);
+
+  // Keyboard: Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z
+  useEffect(() => {
+    const handler = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [undo, redo]);
 
   const getFeedback = useCallback(async (newItems) => {
     if (!apiKey) {
@@ -167,21 +210,47 @@ export default function App() {
     setShowFeedbackModal(true);
   }, [apiKey, customPrompt]);
 
-  // Drag — sections move with their chapters
-  const handleDragStart = (e, idx) => { setDragIdx(idx); e.dataTransfer.effectAllowed = "move"; };
+  // Drag — custom ghost for sections
+  const handleDragStart = (e, idx) => {
+    setDragIdx(idx);
+    e.dataTransfer.effectAllowed = "move";
+    if (items[idx].kind === "section") {
+      const end = sectionGroupEnd(items, idx);
+      const chCount = end - idx - 1;
+      const ghost = document.createElement("div");
+      ghost.style.cssText = "position:absolute;top:-1000px;background:#e8e3dd;padding:14px 20px;border-radius:8px;font-size:18px;color:#1a1a1a;font-family:system-ui;white-space:nowrap;";
+      ghost.textContent = `${items[idx].text}  +${chCount}챕터`;
+      document.body.appendChild(ghost);
+      e.dataTransfer.setDragImage(ghost, 20, 20);
+      setTimeout(() => document.body.removeChild(ghost), 100);
+    }
+  };
   const handleDragOver = (e, idx) => { e.preventDefault(); setOverIdx(idx); };
+
   const handleDrop = (idx) => {
     if (dragIdx === null || dragIdx === idx) { setDragIdx(null); setOverIdx(null); return; }
     const dragItem = items[dragIdx];
+    pushUndo();
 
     if (dragItem.kind === "section") {
-      let groupEnd = dragIdx + 1;
-      while (groupEnd < items.length && items[groupEnd].kind !== "section") groupEnd++;
-      const groupLen = groupEnd - dragIdx;
-      if (idx >= dragIdx && idx < groupEnd) { setDragIdx(null); setOverIdx(null); return; }
-      const group = items.slice(dragIdx, groupEnd);
-      const remaining = [...items.slice(0, dragIdx), ...items.slice(groupEnd)];
-      const insertAt = idx < dragIdx ? idx : idx - groupLen + 1;
+      const dragEnd = sectionGroupEnd(items, dragIdx);
+      const groupLen = dragEnd - dragIdx;
+      if (idx >= dragIdx && idx < dragEnd) { setDragIdx(null); setOverIdx(null); return; }
+      const group = items.slice(dragIdx, dragEnd);
+      const remaining = [...items.slice(0, dragIdx), ...items.slice(dragEnd)];
+      const adjustedIdx = idx < dragIdx ? idx : idx - groupLen;
+
+      let insertAt;
+      if (idx < dragIdx) {
+        insertAt = adjustedIdx;
+      } else {
+        // Dropping down: place after the target section's full group
+        if (remaining[adjustedIdx]?.kind === "section") {
+          insertAt = sectionGroupEnd(remaining, adjustedIdx);
+        } else {
+          insertAt = adjustedIdx + 1;
+        }
+      }
       setItems([...remaining.slice(0, insertAt), ...group, ...remaining.slice(insertAt)]);
     } else {
       const updated = [...items];
@@ -196,6 +265,7 @@ export default function App() {
 
   const addItem = () => {
     if (!newText.trim()) return;
+    pushUndo();
     idCounter.current += 1;
     const type = newTagInput.trim() || newType;
     if (addMode === "chapter" && type && !customTypes.includes(type)) {
@@ -211,10 +281,12 @@ export default function App() {
   };
 
   const removeItem = (idx) => {
+    pushUndo();
     setRemovedItems((prev) => [...prev, items[idx]]);
     setItems(items.filter((_, i) => i !== idx));
   };
   const restoreItem = (ri) => {
+    pushUndo();
     const item = removedItems[ri];
     setRemovedItems((prev) => prev.filter((_, i) => i !== ri));
     setItems([...items, item]);
@@ -222,6 +294,7 @@ export default function App() {
 
   const startEdit = (id, text) => { setEditingId(id); setEditText(text); };
   const saveEdit = (id) => {
+    pushUndo();
     setItems((prev) => prev.map((c) => (c.id === id ? { ...c, text: editText } : c)));
     setEditingId(null);
     setEditText("");
@@ -230,6 +303,7 @@ export default function App() {
 
   const cycleType = (idx) => {
     if (items[idx].kind === "section") return;
+    pushUndo();
     const curr = customTypes.indexOf(items[idx].type);
     const next = curr === -1 ? 0 : (curr + 1) % customTypes.length;
     setItems((prev) => prev.map((c, i) => (i === idx ? { ...c, type: customTypes[next] } : c)));
@@ -243,6 +317,7 @@ export default function App() {
 
   const resetAll = () => {
     if (confirm("목차를 초기 상태로 되돌릴까?")) {
+      pushUndo();
       setItems(INITIAL_ITEMS);
       setRemovedItems([]);
       setFeedback("");
@@ -266,15 +341,15 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen();
+  };
+
   const startTitleEdit = () => { setEditingTitle(true); setTitleInput(bookTitle); };
   const saveTitleEdit = () => {
     if (titleInput.trim()) setBookTitle(titleInput.trim());
     setEditingTitle(false);
-  };
-
-  const toggleFullscreen = () => {
-    if (document.fullscreenElement) document.exitFullscreen();
-    else document.documentElement.requestFullscreen();
   };
 
   const chapters = items.filter((i) => i.kind === "chapter");
@@ -283,11 +358,10 @@ export default function App() {
   let chapterCount = 0;
   let sectionCount = 0;
 
-  // Compute drag group range for visual feedback
+  // Drag group visual range
   let dragGroupEnd = null;
   if (dragIdx !== null && items[dragIdx]?.kind === "section") {
-    dragGroupEnd = dragIdx + 1;
-    while (dragGroupEnd < items.length && items[dragGroupEnd].kind !== "section") dragGroupEnd++;
+    dragGroupEnd = sectionGroupEnd(items, dragIdx);
   }
 
   const backdrop = {
@@ -303,6 +377,11 @@ export default function App() {
     display: "block", width: "100%", textAlign: "left",
     fontSize: 18, padding: "14px 0", background: "none", border: "none",
     color: "#1a1a1a", cursor: "pointer", fontFamily: "inherit",
+  };
+  const headerBtn = {
+    width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center",
+    background: "none", border: "1px solid #ddd", borderRadius: 6,
+    color: "#888", cursor: "pointer", fontSize: 16, flexShrink: 0,
   };
 
   const fs = compact ? 14 : 22;
@@ -393,15 +472,12 @@ export default function App() {
             position: "fixed", top: 0, right: 0, bottom: 0, width: 300,
             background: "#F5F0EB", borderLeft: "1px solid #e8e3dd",
             padding: "28px 28px", zIndex: 201,
-            boxShadow: "-4px 0 24px rgba(0,0,0,0.06)",
-            overflowY: "auto",
+            boxShadow: "-4px 0 24px rgba(0,0,0,0.06)", overflowY: "auto",
           }}>
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
               <button onClick={() => setShowDrawer(false)}
                 style={{ fontSize: 24, background: "none", border: "none", color: "#aaa", cursor: "pointer" }}>×</button>
             </div>
-
-            {/* Stats */}
             <div style={{ marginBottom: 32, fontSize: 16, color: "#888", lineHeight: 2 }}>
               <div>파트 {sectionsList.length}</div>
               {Object.entries(stats).map(([type, count]) => (
@@ -409,26 +485,17 @@ export default function App() {
               ))}
               <div style={{ color: "#bbb", marginTop: 4 }}>총 {chapters.length}개 챕터</div>
             </div>
-
-            {/* Actions */}
             <div style={{ borderTop: "1px solid #e8e3dd", paddingTop: 8 }}>
-              <button style={drawerBtn} onClick={() => { setShowDrawer(false); setShowPromptEditor(true); }}>
-                프롬프트
-              </button>
+              <button style={drawerBtn} onClick={() => { setShowDrawer(false); setShowPromptEditor(true); }}>프롬프트</button>
               <button style={{ ...drawerBtn, color: loading ? "#bbb" : "#1a1a1a" }} disabled={loading}
                 onClick={() => { setShowDrawer(false); getFeedback(items); }}>
                 {loading ? "생각 중..." : "피드백 받기"}
               </button>
-              <button style={drawerBtn} onClick={() => { exportToc(); setShowDrawer(false); }}>
-                내보내기
-              </button>
+              <button style={drawerBtn} onClick={() => { exportToc(); setShowDrawer(false); }}>내보내기</button>
             </div>
-
             <div style={{ borderTop: "1px solid #e8e3dd", marginTop: 8, paddingTop: 8 }}>
               <button style={{ ...drawerBtn, color: "#888" }}
-                onClick={() => { setShowDrawer(false); setShowSettings(true); }}>
-                설정
-              </button>
+                onClick={() => { setShowDrawer(false); setShowSettings(true); }}>설정</button>
             </div>
           </div>
         </>
@@ -444,29 +511,39 @@ export default function App() {
           maxWidth: compact ? 1200 : 860, margin: "0 auto",
           display: "flex", justifyContent: "space-between", alignItems: "center",
         }}>
-          {editingTitle && !compact ? (
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flex: 1, marginRight: 16 }}>
-              <input value={titleInput} onChange={(e) => setTitleInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") saveTitleEdit(); if (e.key === "Escape") setEditingTitle(false); }}
-                autoFocus
+          {/* Left: undo/redo + title */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
+            <button onClick={undo} disabled={undoStack.length === 0} title="되돌리기 (Cmd+Z)"
+              style={{ ...headerBtn, color: undoStack.length ? "#666" : "#ddd", borderColor: undoStack.length ? "#ccc" : "#eee" }}>↩</button>
+            <button onClick={redo} disabled={redoStack.length === 0} title="다시 실행 (Cmd+Shift+Z)"
+              style={{ ...headerBtn, color: redoStack.length ? "#666" : "#ddd", borderColor: redoStack.length ? "#ccc" : "#eee" }}>↪</button>
+            <div style={{ width: 8 }} />
+            {editingTitle && !compact ? (
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flex: 1 }}>
+                <input value={titleInput} onChange={(e) => setTitleInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") saveTitleEdit(); if (e.key === "Escape") setEditingTitle(false); }}
+                  autoFocus
+                  style={{
+                    flex: 1, fontSize: 28, fontWeight: 700, padding: "6px 14px",
+                    border: "1px solid #ccc", borderRadius: 8, background: "#fff",
+                    outline: "none", fontFamily: "inherit", letterSpacing: "-0.02em",
+                  }} />
+                <button onClick={saveTitleEdit}
+                  style={{ fontSize: 16, padding: "8px 20px", border: "1px solid #1a1a1a", borderRadius: 8, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>저장</button>
+              </div>
+            ) : (
+              <h1 onClick={() => !compact && startTitleEdit()}
                 style={{
-                  flex: 1, fontSize: 28, fontWeight: 700, padding: "6px 14px",
-                  border: "1px solid #ccc", borderRadius: 8, background: "#fff",
-                  outline: "none", fontFamily: "inherit", letterSpacing: "-0.02em",
-                }} />
-              <button onClick={saveTitleEdit}
-                style={{ fontSize: 16, padding: "8px 20px", border: "1px solid #1a1a1a", borderRadius: 8, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>저장</button>
-            </div>
-          ) : (
-            <h1 onClick={() => !compact && startTitleEdit()}
-              style={{
-                fontSize: compact ? 16 : 28, fontWeight: 700, letterSpacing: "-0.02em",
-                margin: 0, lineHeight: 1.3, cursor: compact ? "default" : "text",
-              }}>
-              {bookTitle}
-            </h1>
-          )}
+                  fontSize: compact ? 16 : 28, fontWeight: 700, letterSpacing: "-0.02em",
+                  margin: 0, lineHeight: 1.3, cursor: compact ? "default" : "text",
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}>
+                {bookTitle}
+              </h1>
+            )}
+          </div>
 
+          {/* Right: mode + fullscreen + menu */}
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
             <button onClick={() => setCompact(!compact)}
               style={{
@@ -476,26 +553,8 @@ export default function App() {
               }}>
               {compact ? "편집" : "전체"}
             </button>
-            <button onClick={toggleFullscreen}
-              title="풀스크린"
-              style={{
-                fontSize: 15, width: 32, height: 32,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                background: "none", border: "1px solid #ddd", borderRadius: 6,
-                color: "#888", cursor: "pointer",
-              }}>
-              ⛶
-            </button>
-            <button onClick={() => setShowDrawer(true)}
-              title="메뉴"
-              style={{
-                fontSize: 18, width: 32, height: 32,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                background: "none", border: "1px solid #ddd", borderRadius: 6,
-                color: "#888", cursor: "pointer",
-              }}>
-              ≡
-            </button>
+            <button onClick={toggleFullscreen} title="풀스크린" style={headerBtn}>⛶</button>
+            <button onClick={() => setShowDrawer(true)} title="메뉴" style={{ ...headerBtn, fontSize: 18 }}>≡</button>
           </div>
         </div>
       </div>
@@ -532,18 +591,16 @@ export default function App() {
                   cursor: "grab",
                   borderTop: idx === 0 ? "none" : "1px solid #ddd6ce",
                   background: isDragging ? "#e8e3dd" : isOver ? "#ede8e2" : "transparent",
-                  opacity: isDragging ? 0.5 : 1,
+                  opacity: isDragging ? 0.4 : 1,
                   borderLeft: isOver ? "4px solid #1a1a1a" : "4px solid transparent",
-                  borderRadius: 6, transition: "background 0.15s",
+                  borderRadius: 6, transition: "background 0.15s, opacity 0.15s",
                   breakInside: "avoid",
                 }}>
                 <span style={{
                   fontSize: compact ? 12 : 18, color: "#aaa",
                   minWidth: compact ? 44 : 66, paddingTop: compact ? 1 : 2,
                   textAlign: "right", userSelect: "none", flexShrink: 0,
-                }}>
-                  파트{secNum}
-                </span>
+                }}>파트{secNum}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   {editingId === item.id ? (
                     <div style={{ display: "flex", gap: 10 }}>
@@ -578,9 +635,10 @@ export default function App() {
                 gap: compact ? 6 : 10,
                 padding: compact ? "3px 8px" : "8px 16px",
                 marginBottom: 0,
-                background: isDragging ? "#e8e3dd" : isInDragGroup ? "#e8e3dd" : isOver ? "#ede8e2" : "transparent",
-                opacity: (isDragging || isInDragGroup) ? 0.5 : 1,
-                borderRadius: 6, cursor: "grab", transition: "background 0.15s, opacity 0.15s",
+                background: (isDragging || isInDragGroup) ? "#e8e3dd" : isOver ? "#ede8e2" : "transparent",
+                opacity: (isDragging || isInDragGroup) ? 0.4 : 1,
+                borderRadius: 6, cursor: "grab",
+                transition: "background 0.15s, opacity 0.15s",
                 borderLeft: isOver ? "4px solid #1a1a1a" : "4px solid transparent",
                 breakInside: "avoid",
               }}>
