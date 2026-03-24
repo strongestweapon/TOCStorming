@@ -256,7 +256,9 @@ npm run dev
 | **인라인 추가 폼** | ~463, ~834, ~860 | 챕터 뒤 / 파트 뒤 / 하단. 입력+태그선택+새태그+추가/취소. 3곳 동일 구조 |
 | **태그 목록 렌더링** | ~471, ~842, ~875 | `allTypes.map(...)` — 인라인 폼 3곳에서 동일하게 태그 버튼 생성 |
 | **새 태그 입력** | ~478, ~849, ~886 | `newTagInput` — 3곳 모두 동일한 "+" 새 태그 input |
-| **드래그 핸들** | ~428(챕터번호), ~806(파트라벨) | `dragHandleActive.current = true` onMouseDown |
+| **드래그 핸들 (mouse)** | ~428(챕터번호), ~806(파트라벨) | `dragHandleActive.current = true` onMouseDown |
+| **드래그 핸들 (touch)** | ~429(챕터번호), ~807(파트라벨) | `touchDragRef.current = {...}` onTouchStart + `touchAction:"none"` CSS |
+| **터치 드래그 로직** | ~141~193 | useEffect: touchmove(passive:false)+touchend on document. `data-item-id`/`data-item-kind` 속성으로 타겟 탐색 |
 | **Enter 저장** | ~434,436,441(챕터편집), ~813,817(파트편집) | `if (e.key === "Enter") saveEdit(id)` |
 | **내보내기 플래그** | ~303(md), ~374(txt) | `item.favorite` 표시 — 새 플래그 추가 시 양쪽 수정 |
 | **드래그 상태 리셋** | ~179(편집뷰), ~645,598(카드뷰) | `resetDrag()` vs 카드뷰 개별 set — 패턴이 다름 주의 |
