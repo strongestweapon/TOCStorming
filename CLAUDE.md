@@ -80,42 +80,52 @@ npm run dev
 |-------|------|
 | `items` | 현재 목차 배열 |
 | `removedItems` | 삭제된 항목 (복원용) |
-| `dragIdx`, `overIdx` | 드래그 앤 드롭 인덱스 |
 | `feedback`, `loading` | API 피드백 결과 & 로딩 상태 |
 | `addMode`, `newText`, `newType` | 새 항목 추가 UI |
-| `editingId`, `editText` | 인라인 편집 |
+| `editingId`, `editText`, `editNote` | 인라인 편집 (텍스트 + 노트) |
 | `showRemoved` | 삭제 목록 토글 |
 | `showSettings` | 설정 모달 |
 | `apiKey`, `apiKeyInput` | API 키 (localStorage 저장) |
 | `customPrompt` | 사용자 커스텀 시스템 프롬프트 (localStorage 저장) |
 | `showPromptEditor` | 프롬프트 편집 영역 토글 |
 | `showFeedbackModal` | 피드백 팝업 모달 토글 |
+| `tagColors` | 태그별 색상 매핑 (localStorage 저장) |
+| `cardView` | 카드뷰(칸반) 모드 토글 |
+| `cardZoom` | 카드뷰 줌 레벨 (0=맞춤, +/-=확대/축소) |
+| `cardDragId`, `cardOverId`, `cardInsertSide` | 카드뷰 드래그 상태 |
+| `cardDragGroupIdx`, `cardOverGroupTarget` | 카드뷰 파트 드래그 상태 |
+| `colorPickerTag` | 드로어에서 색상 편집 중인 태그 |
 
 ### 주요 함수
 - `getFeedback(items)`: API 호출 → `customPrompt`를 system으로, 목차를 user message로 전송 → 결과를 모달로 표시
-- `handleDragStart/Over/Drop/End`: HTML5 드래그 앤 드롭
-- `moveItem(idx, dir)`: 화살표 버튼으로 항목 이동
+- `handleDragStart/Over/Drop/End`: HTML5 드래그 앤 드롭 (편집뷰)
 - `addItem()`: 새 챕터/파트 추가
-- `removeItem(idx)` / `restoreItem(ri)`: 항목 삭제/복원
-- `startEdit/saveEdit/cancelEdit`: 인라인 텍스트 편집
-- `cycleType(idx)`: 챕터 타입 순환 (에세이→기술→사례)
+- `removeItem(id)` / `restoreItem(ri)`: 항목 삭제/복원
+- `startEdit/saveEdit/cancelEdit`: 인라인 텍스트+노트 편집
 - `saveApiKey()`: API 키 저장
 - `resetAll()`: 초기 데이터로 리셋
-- `exportToc()`: 목차를 .txt 파일로 다운로드
+- `exportToc()`: 목차를 .md 파일로 다운로드 (노트/태그 포함)
+- `importToc()`: .md 파일을 파싱하여 목차 복원
 
 ### UI 레이아웃 (렌더링 순서)
-1. **설정 모달** (`showSettings`): API 키 입력, 내보내기, 초기화
-2. **헤더** (sticky): 제목, 통계 (파트/글/기술/사례 수), ⚙ 버튼
-3. **목차 리스트**: section(파트 헤더) + chapter 항목. 드래그/편집/삭제/이동 지원.
-4. **추가 영역**: "+ 챕터" / "+ 파트" 버튼 → 입력 폼
-5. **삭제 항목**: 토글로 보기/숨기기, 복원 버튼
-6. **피드백 모달** (`showFeedbackModal`): API 응답을 팝업으로 표시
-7. **하단 패널** (fixed): 프롬프트 편집 textarea + "피드백 받기" 버튼
+1. **모달들**: 설정, 프롬프트 편집, 피드백
+2. **드로어** (사이드 메뉴): 통계(태그 색상 인라인 피커), 프롬프트/피드백/내보내기/불러오기/설정
+3. **카드뷰** (`cardView`): 가로 칸반 레이아웃
+   - 헤더: 제목, 줌(−/맞춤/+), undo/redo, 편집/풀스크린/메뉴 버튼
+   - 스크롤 컨테이너 → spacer div → transform:scale된 컨텐츠
+   - 파트=칼럼, 챕터=카드, grid-template-rows: repeat(maxChapters, 1fr)
+4. **편집뷰** (`!cardView`): 기존 리스트 뷰
+   - 헤더 (sticky): 제목, undo/redo, 카드뷰/풀스크린/메뉴 버튼
+   - 목차 리스트: section(파트) + chapter. 드래그/편집/삭제/노트 지원.
+   - 추가 영역: "+ 챕터" / "+ 파트"
 
 ### localStorage 키
-- `book-toc-state`: `{ items, removed }` — 목차 상태
+- `book-toc-state`: `{ items, removed }` — 목차 상태 (items에 note 필드 포함)
 - `book-toc-api-key`: API 키 문자열
 - `book-toc-custom-prompt`: 커스텀 시스템 프롬프트
+- `book-toc-tag-colors`: 태그별 색상 매핑 객체
+- `book-toc-title`: 책 제목
+- `book-toc-types`: 커스텀 태그 타입 배열
 
 ## 개선 시 유의사항
 
@@ -125,12 +135,28 @@ npm run dev
 - 드래그 앤 드롭은 HTML5 Drag API 사용 중. 모바일 대응이 약함 — 터치 드래그 라이브러리 도입 고려.
 - API 호출은 "피드백 받기" 버튼 클릭 시에만 실행됨.
 
+## 카드뷰 레이아웃 원칙
+
+카드뷰 CSS 수정 시 반드시 지킬 것:
+
+1. **구조**: 90vw×96vh 박스 → 헤더(고정) → 스크롤 컨테이너 → spacer div → transform:scale 컨텐츠
+2. **카드 높이 통일**: `grid-template-rows: repeat(maxChapters, 1fr)` — 가장 긴 칼럼 기준
+3. **줌**: `transform: scale(zoomScale)` + spacer `width/height: scale*100%` + 내부 `width/height: 100/scale%`
+4. **flex chain 확인**: 부모가 flex container가 아니면 자식 flex:1 무의미
+5. **코드 전에 레이아웃 구조를 텍스트로 먼저 설계할 것**
+
+## 개선 시 유의사항 (코딩 원칙)
+
+- **임기응변 금지**: 속성 하나 바꿔보는 추측성 시도 대신, "왜 안 되는지" CSS 스펙 기준으로 진단 먼저
+- **기존 패턴 참고 필수**: 새 뷰/모드 만들 때 편집뷰의 UX 패턴(인서트라인, 드래그 피드백 등) 동일 적용
+- **수정 시 사이드이펙트 확인**: 한 곳 바꾸면 다른 곳 깨지지 않는지 체크
+- **구조적 해결 우선**: 픽셀 단위 임기응변보다 근본적 해결책
+
 ## 잠재적 개선 방향
 
 - 컴포넌트 분리 (ChapterItem, SectionHeader, FeedbackPanel, SettingsModal)
 - 드래그 라이브러리 도입 (dnd-kit 등) — 모바일 터치 지원, 애니메이션
-- API 호출 디바운스 (변경 후 1~2초 대기 후 호출)
 - 피드백 히스토리 (이전 피드백 비교)
 - 목차 버전 관리 (스냅샷 저장/복원)
-- 마크다운/JSON 내보내기
+- 아이디어 메모장 기능 (목차 편집 전 브레인스토밍 공간)
 - 다크모드 (단, 베이지+블랙 톤 유지)
