@@ -131,6 +131,7 @@ export default function App() {
   const touchDragRef = useRef({ active: false, type: null, id: null, groupIdx: null, dropPos: null, overGroupIdx: null });
   const touchStateRef = useRef({});
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  const [editLocked, setEditLocked] = useState(() => window.innerWidth < 768);
 
   useEffect(() => { saveState(items, removedItems); }, [items, removedItems]);
   useEffect(() => { try { localStorage.setItem("book-toc-custom-prompt", customPrompt); } catch {} }, [customPrompt]);
@@ -138,7 +139,7 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem("book-toc-types", JSON.stringify(customTypes)); } catch {} }, [customTypes]);
   useEffect(() => { try { localStorage.setItem("book-toc-tag-colors", JSON.stringify(tagColors)); } catch {} }, [tagColors]);
   useEffect(() => { const h = () => { dragHandleActive.current = false; }; document.addEventListener("mouseup", h); return () => document.removeEventListener("mouseup", h); }, []);
-  useEffect(() => { const h = () => { const m = window.innerWidth < 768; setIsMobile(m); if (m) setCardView(false); }; window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
+  useEffect(() => { const h = () => { const m = window.innerWidth < 768; setIsMobile(m); if (m) { setCardView(false); setEditLocked(true); } }; window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
 
   // Touch drag (iPad/모바일)
   useEffect(() => {
@@ -342,7 +343,7 @@ export default function App() {
   const restoreItem = (ri) => { pushUndo(); setRemovedItems((p) => p.filter((_, i) => i !== ri)); setItems([...items, removedItems[ri]]); };
   const [editType, setEditType] = useState("");
   const [editNote, setEditNote] = useState("");
-  const startEdit = (id, text, type, note) => { setEditingId(id); setEditText(text); setEditType(type || ""); setEditNote(note || ""); };
+  const startEdit = (id, text, type, note) => { if (editLocked) return; setEditingId(id); setEditText(text); setEditType(type || ""); setEditNote(note || ""); };
   const saveEdit = (id) => {
     pushUndo();
     const typeVal = editType.trim();
@@ -422,7 +423,7 @@ export default function App() {
     input.click();
   };
   const toggleFullscreen = () => { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); };
-  const startTitleEdit = () => { setEditingTitle(true); setTitleInput(bookTitle); };
+  const startTitleEdit = () => { if (editLocked) return; setEditingTitle(true); setTitleInput(bookTitle); };
   const saveTitleEdit = () => { if (titleInput.trim()) setBookTitle(titleInput.trim()); setEditingTitle(false); };
   const toggleFavorite = (id) => { pushUndo(); setItems(p => p.map(i => i.id === id ? { ...i, favorite: !i.favorite } : i)); };
   const exportTocTxt = () => {
@@ -470,7 +471,7 @@ export default function App() {
     return (
       <div key={ch.id}>
         {dropLinePos === chIdx && dragChapterId !== ch.id && <InsertLine />}
-        <div draggable data-item-id={ch.id} data-item-kind="chapter"
+        <div draggable={!editLocked} data-item-id={ch.id} data-item-kind="chapter"
           onDragStart={(e) => {
             if (!dragHandleActive.current) { e.preventDefault(); return; }
             dragHandleActive.current = false;
@@ -490,9 +491,9 @@ export default function App() {
             ...(isMobile ? { flexWrap: "wrap" } : {}),
           }}>
           <span
-            onMouseDown={() => { dragHandleActive.current = true; }}
-            onTouchStart={() => { touchDragRef.current = { active: true, type: "chapter", id: ch.id, groupIdx: null, dropPos: null, overGroupIdx: null }; setDragType("chapter"); setDragChapterId(ch.id); }}
-            style={{ fontSize: 18, color: "#bbb", minWidth: isMobile ? 28 : 40, padding: "8px 8px 8px 4px", textAlign: "right", userSelect: "none", flexShrink: 0, cursor: "grab", touchAction: "none", margin: "-8px 0" }}>{num}</span>
+            onMouseDown={() => { if (!editLocked) dragHandleActive.current = true; }}
+            onTouchStart={() => { if (editLocked) return; touchDragRef.current = { active: true, type: "chapter", id: ch.id, groupIdx: null, dropPos: null, overGroupIdx: null }; setDragType("chapter"); setDragChapterId(ch.id); }}
+            style={{ fontSize: 18, color: "#bbb", minWidth: isMobile ? 28 : 40, padding: "8px 8px 8px 4px", textAlign: "right", userSelect: "none", flexShrink: 0, cursor: editLocked ? "default" : "grab", touchAction: editLocked ? "auto" : "none", margin: "-8px 0" }}>{num}</span>
           <div style={{ flex: 1, minWidth: 0, ...(isMobile ? { flexBasis: "calc(100% - 50px)" } : {}) }}>
             {editingId === ch.id ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -509,7 +510,7 @@ export default function App() {
                   style={{ fontSize: 14, padding: "6px 12px", border: "1px solid #e8e3dd", borderRadius: 6, background: "#fff", outline: "none", fontFamily: "inherit", color: "#888" }} />
               </div>
             ) : (
-              <div onClick={() => startEdit(ch.id, ch.text, ch.type, ch.note)} style={{ cursor: "text" }}>
+              <div onClick={() => startEdit(ch.id, ch.text, ch.type, ch.note)} style={{ cursor: editLocked ? "default" : "text" }}>
                 <span style={{ fontSize: fs, lineHeight: 1.4, wordBreak: "keep-all" }}>{ch.text}</span>
                 {ch.note && <div style={{ fontSize: 15, color: "#aaa", marginTop: 2, lineHeight: 1.4 }}>{ch.note}</div>}
               </div>
@@ -519,12 +520,14 @@ export default function App() {
             <div style={{ display: "flex", alignItems: "center", ...(isMobile ? { width: "100%", paddingLeft: 40, marginTop: 2 } : {}) }}>
               {ch.favorite && <span title="마음에 드는" style={{ fontSize: 14, color: "#daa520", flexShrink: 0, marginTop: 3, userSelect: "none" }}>★</span>}
               <span onClick={() => startEdit(ch.id, ch.text, ch.type, ch.note)}
-                style={{ fontSize: 14, padding: "3px 10px", border: "1px solid #ccc", borderRadius: 4, background: "transparent", color: "#888", cursor: "pointer", flexShrink: 0, marginTop: 2 }}>
+                style={{ fontSize: 14, padding: "3px 10px", border: "1px solid #ccc", borderRadius: 4, background: "transparent", color: "#888", cursor: editLocked ? "default" : "pointer", flexShrink: 0, marginTop: 2 }}>
                 {ch.type}
               </span>
-              <button onClick={() => toggleFavorite(ch.id)} title="마음에 드는" style={{ fontSize: 16, background: "none", border: "none", color: ch.favorite ? "#daa520" : "#ddd", cursor: "pointer", padding: "0 3px", flexShrink: 0, lineHeight: 1 }}>★</button>
-              <button onClick={() => { setInsertAfterItemId(ch.id); setAddMode("chapter"); setNewText(""); setNewTagInput(""); }} title="여기에 추가" style={{ fontSize: 18, background: "none", border: "none", color: "#ddd", cursor: "pointer", padding: "0 3px", flexShrink: 0, lineHeight: 1 }}>+</button>
-              <button onClick={() => removeItem(ch.id)} style={{ fontSize: 22, background: "none", border: "none", color: "#ddd", cursor: "pointer", padding: "0 6px", flexShrink: 0, lineHeight: 1 }}>×</button>
+              {!editLocked && <>
+                <button onClick={() => toggleFavorite(ch.id)} title="마음에 드는" style={{ fontSize: 16, background: "none", border: "none", color: ch.favorite ? "#daa520" : "#ddd", cursor: "pointer", padding: "0 3px", flexShrink: 0, lineHeight: 1 }}>★</button>
+                <button onClick={() => { setInsertAfterItemId(ch.id); setAddMode("chapter"); setNewText(""); setNewTagInput(""); }} title="여기에 추가" style={{ fontSize: 18, background: "none", border: "none", color: "#ddd", cursor: "pointer", padding: "0 3px", flexShrink: 0, lineHeight: 1 }}>+</button>
+                <button onClick={() => removeItem(ch.id)} style={{ fontSize: 22, background: "none", border: "none", color: "#ddd", cursor: "pointer", padding: "0 6px", flexShrink: 0, lineHeight: 1 }}>×</button>
+              </>}
             </div>
           )}
         </div>
@@ -664,14 +667,21 @@ export default function App() {
                   <button onClick={saveTitleEdit} style={{ fontSize: 16, padding: "8px 20px", border: "1px solid #1a1a1a", borderRadius: 8, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>저장</button>
                 </div>
               ) : (
-                <h1 onClick={startTitleEdit} style={{ fontSize: isMobile ? 20 : 28, fontWeight: 700, letterSpacing: "-0.02em", margin: 0, marginLeft: isMobile ? 8 : 32, lineHeight: 1.3, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bookTitle}</h1>
+                <h1 onClick={startTitleEdit} style={{ fontSize: isMobile ? 20 : 28, fontWeight: 700, letterSpacing: "-0.02em", margin: 0, marginLeft: isMobile ? 8 : 32, lineHeight: 1.3, cursor: editLocked ? "default" : "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bookTitle}</h1>
               )}
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
-              <button onClick={undo} disabled={!undoStack.length} title="되돌리기" style={{ ...headerBtn, color: undoStack.length ? "#666" : "#ddd", borderColor: undoStack.length ? "#ccc" : "#eee" }}>↩</button>
-              <button onClick={redo} disabled={!redoStack.length} title="다시 실행" style={{ ...headerBtn, color: redoStack.length ? "#666" : "#ddd", borderColor: redoStack.length ? "#ccc" : "#eee" }}>↪</button>
+              <button onClick={undo} disabled={!undoStack.length} title="되돌리기" style={{ ...headerBtn, color: undoStack.length ? "#666" : "#ddd", borderColor: undoStack.length ? "#ccc" : "#eee" }}>↩︎</button>
+              <button onClick={redo} disabled={!redoStack.length} title="다시 실행" style={{ ...headerBtn, color: redoStack.length ? "#666" : "#ddd", borderColor: redoStack.length ? "#ccc" : "#eee" }}>↪︎</button>
               {!isMobile && <button onClick={() => setCardView(true)} style={{ fontSize: 13, padding: "6px 14px", height: 32, background: "none", border: "1px solid #ddd", borderRadius: 6, color: "#666", cursor: "pointer", fontFamily: "inherit" }}>카드뷰</button>}
-              <button onClick={toggleFullscreen} title="풀스크린" style={headerBtn}>⛶</button>
+              {isMobile ? (
+                <button onClick={() => {
+                  if (!editLocked) { setEditingId(null); setEditingTitle(false); setAddMode(null); setInsertAfterItemId(null); }
+                  setEditLocked(l => !l);
+                }} title={editLocked ? "편집 잠금 해제" : "편집 잠금"} style={headerBtn}>{editLocked ? "🔒" : "🔓"}</button>
+              ) : (
+                <button onClick={toggleFullscreen} title="풀스크린" style={headerBtn}>⛶</button>
+              )}
               <button onClick={() => setShowDrawer(true)} title="메뉴" style={{ ...headerBtn, fontSize: 18 }}>≡</button>
             </div>
           </div>
@@ -687,8 +697,8 @@ export default function App() {
               <button onClick={() => setCardZoom((z) => z - 1)} title="축소" style={headerBtn}>−</button>
               <button onClick={() => setCardZoom(0)} title="최적화" style={{ ...headerBtn, fontSize: 11, width: "auto", padding: "0 8px" }}>맞춤</button>
               <button onClick={() => setCardZoom((z) => z + 1)} title="확대" style={headerBtn}>+</button>
-              <button onClick={undo} disabled={!undoStack.length} title="되돌리기" style={{ ...headerBtn, width: 28, height: 28, fontSize: 14, color: undoStack.length ? "#666" : "#ddd", borderColor: undoStack.length ? "#ccc" : "#eee" }}>↩</button>
-              <button onClick={redo} disabled={!redoStack.length} title="다시 실행" style={{ ...headerBtn, width: 28, height: 28, fontSize: 14, color: redoStack.length ? "#666" : "#ddd", borderColor: redoStack.length ? "#ccc" : "#eee" }}>↪</button>
+              <button onClick={undo} disabled={!undoStack.length} title="되돌리기" style={{ ...headerBtn, width: 28, height: 28, fontSize: 14, color: undoStack.length ? "#666" : "#ddd", borderColor: undoStack.length ? "#ccc" : "#eee" }}>↩︎</button>
+              <button onClick={redo} disabled={!redoStack.length} title="다시 실행" style={{ ...headerBtn, width: 28, height: 28, fontSize: 14, color: redoStack.length ? "#666" : "#ddd", borderColor: redoStack.length ? "#ccc" : "#eee" }}>↪︎</button>
               <button onClick={() => setCardView(false)} style={{ fontSize: 12, padding: "5px 12px", height: 28, background: "none", border: "1px solid #ddd", borderRadius: 6, color: "#666", cursor: "pointer", fontFamily: "inherit" }}>편집</button>
               <button onClick={toggleFullscreen} title="풀스크린" style={{ ...headerBtn, width: 28, height: 28, fontSize: 14 }}>⛶</button>
               <button onClick={() => setShowDrawer(true)} title="메뉴" style={{ ...headerBtn, width: 28, height: 28, fontSize: 16 }}>≡</button>
@@ -845,7 +855,7 @@ export default function App() {
           const lastChIdx = group.chapters.length > 0 ? flatIdx[group.chapters[group.chapters.length - 1].id] : secIdx;
 
           return (
-            <div key={sec.id} draggable
+            <div key={sec.id} draggable={!editLocked}
               onDragStart={(e) => {
                 if (!dragHandleActive.current) { e.preventDefault(); return; }
                 dragHandleActive.current = false;
@@ -872,9 +882,9 @@ export default function App() {
                   marginBottom: 4,
                 }}>
                 <span
-                  onMouseDown={() => { dragHandleActive.current = true; }}
-                  onTouchStart={() => { touchDragRef.current = { active: true, type: "group", id: sec.id, groupIdx: gi, dropPos: null, overGroupIdx: null }; setDragType("group"); setDragGroupIdx(gi); }}
-                  style={{ fontSize: 18, color: "#aaa", minWidth: isMobile ? 50 : 66, paddingTop: 2, textAlign: "right", userSelect: "none", flexShrink: 0, cursor: "grab", touchAction: "none" }}>파트{secNum}</span>
+                  onMouseDown={() => { if (!editLocked) dragHandleActive.current = true; }}
+                  onTouchStart={() => { if (editLocked) return; touchDragRef.current = { active: true, type: "group", id: sec.id, groupIdx: gi, dropPos: null, overGroupIdx: null }; setDragType("group"); setDragGroupIdx(gi); }}
+                  style={{ fontSize: 18, color: "#aaa", minWidth: isMobile ? 50 : 66, paddingTop: 2, textAlign: "right", userSelect: "none", flexShrink: 0, cursor: editLocked ? "default" : "grab", touchAction: editLocked ? "auto" : "none" }}>파트{secNum}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   {editingId === sec.id ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -888,16 +898,16 @@ export default function App() {
                         style={{ fontSize: 14, padding: "6px 12px", border: "1px solid #e8e3dd", borderRadius: 6, background: "#fff", outline: "none", fontFamily: "inherit", color: "#888" }} />
                     </div>
                   ) : (
-                    <div onClick={() => startEdit(sec.id, sec.text, undefined, sec.note)} style={{ cursor: "text" }}>
+                    <div onClick={() => startEdit(sec.id, sec.text, undefined, sec.note)} style={{ cursor: editLocked ? "default" : "text" }}>
                       <span style={{ fontSize: fs, fontWeight: 700, lineHeight: 1.4 }}>{sec.text}</span>
                       {sec.note && <div style={{ fontSize: 15, color: "#aaa", marginTop: 2, lineHeight: 1.4, fontWeight: 400 }}>{sec.note}</div>}
                     </div>
                   )}
                 </div>
-                {editingId !== sec.id && (
+                {editingId !== sec.id && !editLocked && (
                   <button onClick={() => { setInsertAfterItemId(sec.id); setAddMode("chapter"); setNewText(""); setNewTagInput(""); }} title="여기에 추가" style={{ fontSize: 18, background: "none", border: "none", color: "#ddd", cursor: "pointer", padding: "0 3px", flexShrink: 0, lineHeight: 1 }}>+</button>
                 )}
-                {group.chapters.length === 0 && <button onClick={() => removeItem(sec.id)} style={{ fontSize: 22, background: "none", border: "none", color: "#ddd", cursor: "pointer", padding: "0 6px", flexShrink: 0 }}>×</button>}
+                {!editLocked && group.chapters.length === 0 && <button onClick={() => removeItem(sec.id)} style={{ fontSize: 22, background: "none", border: "none", color: "#ddd", cursor: "pointer", padding: "0 6px", flexShrink: 0 }}>×</button>}
               </div>
               {/* 파트 헤더 뒤 인라인 추가 */}
               {insertAfterItemId === sec.id && addMode && (
@@ -961,12 +971,12 @@ export default function App() {
               <button onClick={addItem} style={{ fontSize: 18, padding: "10px 28px", border: "1px solid #1a1a1a", borderRadius: 6, background: "#1a1a1a", color: "#F5F0EB", cursor: "pointer" }}>추가</button>
             </div>
           </div>
-        ) : (
+        ) : !editLocked ? (
           <div style={{ display: "flex", gap: 12, marginTop: 20, marginBottom: 20 }}>
             <button onClick={() => setAddMode("chapter")} style={{ flex: 1, fontSize: 20, padding: "16px 24px", border: "1px dashed #ccc", borderRadius: 8, background: "transparent", color: "#999", cursor: "pointer" }}>+ 챕터</button>
             <button onClick={() => setAddMode("section")} style={{ flex: 1, fontSize: 20, padding: "16px 24px", border: "1px dashed #ccc", borderRadius: 8, background: "transparent", color: "#999", cursor: "pointer" }}>+ 파트</button>
           </div>
-        )}
+        ) : null}
       </div>}
     </div>
   );
