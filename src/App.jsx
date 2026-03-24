@@ -128,6 +128,8 @@ export default function App() {
   const [colorPickerTag, setColorPickerTag] = useState(null);
   const [insertAfterItemId, setInsertAfterItemId] = useState(null); // 위치 지정 삽입
   const dragHandleActive = useRef(false); // 드래그 핸들 활성 여부
+  const touchDragRef = useRef({ active: false, type: null, id: null, groupIdx: null, dropPos: null, overGroupIdx: null });
+  const touchStateRef = useRef({});
 
   useEffect(() => { saveState(items, removedItems); }, [items, removedItems]);
   useEffect(() => { try { localStorage.setItem("book-toc-custom-prompt", customPrompt); } catch {} }, [customPrompt]);
@@ -135,6 +137,66 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem("book-toc-types", JSON.stringify(customTypes)); } catch {} }, [customTypes]);
   useEffect(() => { try { localStorage.setItem("book-toc-tag-colors", JSON.stringify(tagColors)); } catch {} }, [tagColors]);
   useEffect(() => { const h = () => { dragHandleActive.current = false; }; document.addEventListener("mouseup", h); return () => document.removeEventListener("mouseup", h); }, []);
+
+  // Touch drag (iPad/모바일)
+  useEffect(() => {
+    const onMove = (e) => {
+      const td = touchDragRef.current;
+      if (!td.active) return;
+      e.preventDefault();
+      const touch = e.touches[0];
+      const y = touch.clientY;
+      const threshold = 80, h = window.innerHeight;
+      if (y < threshold) window.scrollBy(0, -Math.round(12 * (1 - y / threshold)));
+      else if (y > h - threshold) window.scrollBy(0, Math.round(12 * (1 - (h - y) / threshold)));
+      const els = document.querySelectorAll("[data-item-id]");
+      for (const el of els) {
+        const rect = el.getBoundingClientRect();
+        if (y < rect.top || y > rect.bottom) continue;
+        const itemId = el.dataset.itemId, itemKind = el.dataset.itemKind;
+        if (td.type === "chapter" && itemId !== td.id) {
+          const fi = touchStateRef.current.flatIdx;
+          const pos = itemKind === "section" ? fi[itemId] + 1 : (y < rect.top + rect.height / 2 ? fi[itemId] : fi[itemId] + 1);
+          td.dropPos = pos;
+          setDropLinePos(pos);
+        } else if (td.type === "group") {
+          const gs = touchStateRef.current.groups;
+          for (let gi = 0; gi < gs.length; gi++) {
+            if (gs[gi].section?.id === itemId || gs[gi].chapters.some(c => c.id === itemId)) {
+              td.overGroupIdx = gi; setOverGroupIdx(gi); break;
+            }
+          }
+        }
+        break;
+      }
+    };
+    const onEnd = () => {
+      const td = touchDragRef.current;
+      if (!td.active) return;
+      td.active = false;
+      const { items: cur, groups: gs, flattenGroups: flat, pushUndo: pu } = touchStateRef.current;
+      if (td.type === "chapter" && td.id && td.dropPos !== null) {
+        pu();
+        const srcIdx = cur.findIndex(i => i.id === td.id);
+        const updated = [...cur];
+        const [moved] = updated.splice(srcIdx, 1);
+        const adj = td.dropPos > srcIdx ? td.dropPos - 1 : td.dropPos;
+        updated.splice(adj, 0, moved);
+        setItems(updated);
+      } else if (td.type === "group" && td.groupIdx !== null && td.overGroupIdx !== null && td.groupIdx !== td.overGroupIdx) {
+        pu();
+        const reordered = [...gs];
+        const [moved] = reordered.splice(td.groupIdx, 1);
+        reordered.splice(td.overGroupIdx, 0, moved);
+        setItems(flat(reordered));
+      }
+      setDragType(null); setDragGroupIdx(null); setDragChapterId(null); setOverGroupIdx(null); setDropLinePos(null);
+      td.dropPos = null; td.overGroupIdx = null;
+    };
+    document.addEventListener("touchmove", onMove, { passive: false });
+    document.addEventListener("touchend", onEnd);
+    return () => { document.removeEventListener("touchmove", onMove); document.removeEventListener("touchend", onEnd); };
+  }, []);
 
   // Groups + flat index map
   const groups = useMemo(() => {
@@ -394,6 +456,8 @@ export default function App() {
   const fs = 22;
   const zoomScale = Math.pow(1.25, cardZoom); // each step = 25% bigger/smaller
 
+  touchStateRef.current = { items, groups, flatIdx, flattenGroups, pushUndo };
+
   const InsertLine = () => <div style={{ height: 3, background: "#1a1a1a", borderRadius: 2, margin: "2px 0 2px 48px" }} />;
 
   const renderChapter = (ch) => {
@@ -404,7 +468,7 @@ export default function App() {
     return (
       <div key={ch.id}>
         {dropLinePos === chIdx && dragChapterId !== ch.id && <InsertLine />}
-        <div draggable
+        <div draggable data-item-id={ch.id} data-item-kind="chapter"
           onDragStart={(e) => {
             if (!dragHandleActive.current) { e.preventDefault(); return; }
             dragHandleActive.current = false;
@@ -424,7 +488,8 @@ export default function App() {
           }}>
           <span
             onMouseDown={() => { dragHandleActive.current = true; }}
-            style={{ fontSize: 18, color: "#bbb", minWidth: 32, paddingTop: 2, textAlign: "right", userSelect: "none", flexShrink: 0, cursor: "grab" }}>{num}</span>
+            onTouchStart={() => { touchDragRef.current = { active: true, type: "chapter", id: ch.id, groupIdx: null, dropPos: null, overGroupIdx: null }; setDragType("chapter"); setDragChapterId(ch.id); }}
+            style={{ fontSize: 18, color: "#bbb", minWidth: 40, padding: "8px 8px 8px 4px", textAlign: "right", userSelect: "none", flexShrink: 0, cursor: "grab", touchAction: "none", margin: "-8px 0" }}>{num}</span>
           <div style={{ flex: 1, minWidth: 0 }}>
             {editingId === ch.id ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -795,7 +860,7 @@ export default function App() {
                 transition: "opacity 0.15s, background 0.15s",
               }}>
               {/* Section header */}
-              <div
+              <div data-item-id={sec.id} data-item-kind="section"
                 onDragOver={(e) => handleSectionDragOverForChapter(e, sec.id)}
                 onDrop={(e) => { if (dragType === "chapter") { e.stopPropagation(); handleChapterDropAtPos(e); } }}
                 style={{
@@ -805,7 +870,8 @@ export default function App() {
                 }}>
                 <span
                   onMouseDown={() => { dragHandleActive.current = true; }}
-                  style={{ fontSize: 18, color: "#aaa", minWidth: 66, paddingTop: 2, textAlign: "right", userSelect: "none", flexShrink: 0, cursor: "grab" }}>파트{secNum}</span>
+                  onTouchStart={() => { touchDragRef.current = { active: true, type: "group", id: sec.id, groupIdx: gi, dropPos: null, overGroupIdx: null }; setDragType("group"); setDragGroupIdx(gi); }}
+                  style={{ fontSize: 18, color: "#aaa", minWidth: 66, paddingTop: 2, textAlign: "right", userSelect: "none", flexShrink: 0, cursor: "grab", touchAction: "none" }}>파트{secNum}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   {editingId === sec.id ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
