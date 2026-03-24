@@ -139,11 +139,46 @@ npm run dev
 
 카드뷰 CSS 수정 시 반드시 지킬 것:
 
-1. **구조**: 90vw×96vh 박스 → 헤더(고정) → 스크롤 컨테이너 → spacer div → transform:scale 컨텐츠
-2. **카드 높이 통일**: `grid-template-rows: repeat(maxChapters, 1fr)` — 가장 긴 칼럼 기준
-3. **줌**: `transform: scale(zoomScale)` + spacer `width/height: scale*100%` + 내부 `width/height: 100/scale%`
-4. **flex chain 확인**: 부모가 flex container가 아니면 자식 flex:1 무의미
-5. **코드 전에 레이아웃 구조를 텍스트로 먼저 설계할 것**
+### DOM 구조
+```
+div (90vw × 96vh, flex column)              ← 전체 컨테이너
+  div (헤더: 제목 + 줌/undo/편집 버튼)        ← flexShrink: 0, 줌 밖
+  div (overflow: auto)                       ← 스크롤 컨테이너
+    div (width/height: zoomScale*100%)       ← spacer (스크롤 영역 확보)
+      div (width/height: 100/zoomScale%)     ← 컨텐츠 (transform: scale)
+        div (flex row, gap: 6)               ← 칼럼 행
+          div × 8 (flex: 1, flex column)     ← 각 파트 칼럼
+            div (파트 헤더)
+            div (grid, repeat(maxCh, 1fr))   ← 카드 그리드
+              div × N (카드)
+```
+
+### 줌 구현 (transform: scale 패턴)
+- `cardZoom` state: 0=맞춤, +1=확대, -1=축소
+- `zoomScale = Math.pow(1.25, cardZoom)` — 매 단계 25%씩
+- **핵심**: 맞춤(0) 상태의 레이아웃을 그대로 유지한 채 균일 확대
+- **CSS zoom 쓰면 안 됨**: 레이아웃 리플로우 발생 → 칼럼 좁아지고 텍스트 줄바꿈
+- **헤더는 줌 밖**: 스크롤 컨테이너만 줌 적용, 헤더 버튼은 항상 고정 크기
+- **스크롤 처리**: spacer div가 scale된 크기를 부모에게 알려줘서 스크롤바 생성
+  ```
+  spacer: width: ${scale * 100}%, height: ${scale * 100}%
+  content: width: ${100 / scale}%, height: ${100 / scale}%, transform: scale(${scale})
+  ```
+
+### 카드 높이 통일
+- `maxChapters = Math.max(...groups.map(g => g.chapters.length))`
+- `grid-template-rows: repeat(maxChapters, 1fr)` — 가장 긴 칼럼 기준
+- 짧은 칼럼은 아래가 빔 (카드가 비정상적으로 늘어나지 않음)
+- flex: 1로 카드 높이를 분배하면 프롤로그(1개)가 거대해지는 문제 발생 → grid 1fr이 정답
+
+### 드래그
+- 카드 드래그: 상/하 반 감지 → before/after 인서트라인 (가로 3px)
+- 파트 드래그: 칼럼 전체 드래그 → 좌/우 인서트라인 (세로 3px)
+- 카드를 다른 파트로 드롭: 해당 파트 마지막에 삽입
+
+### 기타 원칙
+- **flex chain 확인**: 부모가 flex container가 아니면 자식 flex:1 무의미
+- **코드 전에 레이아웃 구조를 텍스트로 먼저 설계할 것**
 
 ## 개선 시 유의사항 (코딩 원칙)
 
